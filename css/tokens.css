@@ -1,0 +1,264 @@
+/* ZELUX Duck Studio — 设计令牌
+   一处改，全站变。品牌主色 #00D8A0 只做"强调"，文字一律用加深版 --brand-ink 保证对比度。 */
+:root {
+  /* 品牌 */
+  --brand: #00D8A0;
+  --brand-600: #00BE8C;
+  --brand-ink: #00795B;      /* 浅底上的品牌文字/图标 */
+  --brand-050: #E8FBF5;
+  --brand-100: #C8F4E5;
+
+  --blue: #3D7BFF;
+  --blue-ink: #2A5FD0;
+  --blue-050: #EEF3FF;
+
+  --warn: #FFB020;
+  --warn-ink: #8A5A00;
+  --warn-050: #FFF6E4;
+
+  --danger: #FF5A5F;
+  --danger-ink: #B3262C;
+  --danger-050: #FFEDEE;
+
+  /* 舞台（深空） */
+  --stage: #0B0F14;
+  --stage-1: #10161D;
+  --stage-line: #22303C;
+  --stage-line-2: #2E404F;
+  --stage-ink: #E9F0F6;
+  --stage-ink-2: #A9B8C6;
+  --stage-mute: #74879A;
+
+  /* 面板 */
+  --bg: #F6F8FA;
+  --panel: #FFFFFF;
+  --panel-2: #FBFCFD;
+  --panel-3: #F1F4F7;
+  --line: #E5EAF0;
+  --line-2: #D6DEE7;
+
+  /* 文字 */
+  --ink: #0E1721;
+  --ink-2: #3E4C5B;
+  --ink-3: #6B7A8A;
+  --ink-4: #99A6B4;
+
+  /* 圆角 */
+  --r8: 8px;
+  --r12: 12px;
+  --r16: 16px;
+  --r-pill: 999px;
+
+  /* 阴影：只用来分层，不做装饰 */
+  --shadow: 0 1px 2px rgba(14, 23, 33, .04), 0 2px 8px rgba(14, 23, 33, .04);
+  --shadow-pop: 0 10px 28px rgba(14, 23, 33, .14), 0 2px 6px rgba(14, 23, 33, .06);
+
+  /* 字体 */
+  --font-sans: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* 动效：只给状态变化，≤180ms */
+  --t: 160ms cubic-bezier(.2, .8, .2, 1);
+  --t-fast: 120ms cubic-bezier(.2, .8, .2, 1);
+
+  /* 布局尺寸 */
+  --topbar-h: 56px;
+  --sidebar-w: 216px;
+  --tabbar-h: 58px;
+  --page-max: 1280px;
+  --gutter: 20px;
+}
+
+/* 三套可切换主题：主色语义一致，字色/框线跟随底色保持对比。 */
+:root[data-theme="atelier"] {
+  --brand: #00AE42;
+  --brand-600: #008F37;
+  --brand-ink: #08742F;
+  --brand-050: #EAF7EE;
+  --brand-100: #CBEAD4;
+  --blue: #246BCE;
+  --blue-ink: #1F55A2;
+  --blue-050: #ECF3FC;
+  --bg: #F5F6F2;
+  --panel: #FFFFFF;
+  --panel-2: #FBFCF9;
+  --panel-3: #EEF1EA;
+  --line: #DDE2D8;
+  --line-2: #C8D0C4;
+  --ink: #17221A;
+  --ink-2: #405044;
+  --ink-3: #66756A;
+  --ink-4: #87948A;
+  --stage: #101713;
+  --stage-1: #17221B;
+  --stage-line: #33443A;
+  --stage-line-2: #435A4B;
+  --stage-ink: #F2F7F1;
+  --stage-ink-2: #CBD8CC;
+  --stage-mute: #91A394;
+  --shadow: 0 1px 2px rgba(23,34,26,.05), 0 8px 24px rgba(23,34,26,.045);
+}
+
+:root[data-theme="duckclub"] {
+  --brand: #2367D1;
+  --brand-600: #174EA9;
+  --brand-ink: #1C4F9A;
+  --brand-050: #EDF4FF;
+  --brand-100: #D1E2FF;
+  --blue: #2367D1;
+  --blue-ink: #174EA9;
+  --blue-050: #EDF4FF;
+  --bg: #F4F7FA;
+  --panel: #FFFFFF;
+  --panel-2: #FAFCFE;
+  --panel-3: #EDF2F7;
+  --line: #DCE4ED;
+  --line-2: #C7D3E0;
+  --ink: #172335;
+  --ink-2: #42536A;
+  --ink-3: #6A7C92;
+  --ink-4: #91A0B1;
+  --stage: #101B2A;
+  --stage-1: #17263A;
+  --stage-line: #2D4564;
+  --stage-line-2: #3C5D85;
+  --stage-ink: #F3F7FC;
+  --stage-ink-2: #CAD8EA;
+  --stage-mute: #91A8C3;
+  --shadow: 0 1px 2px rgba(23,35,53,.05), 0 8px 24px rgba(23,35,53,.05);
+}
+
+:root[data-theme="citrus"] {
+  --brand: #D89500;
+  --brand-600: #B57700;
+  --brand-ink: #875600;
+  --brand-050: #FFF7D9;
+  --brand-100: #F5E2A1;
+  --blue: #426BBA;
+  --blue-ink: #31548F;
+  --blue-050: #EFF4FF;
+  --bg: #FAF7EE;
+  --panel: #FFFEFA;
+  --panel-2: #FFFDF7;
+  --panel-3: #F2EEE2;
+  --line: #E8E0CD;
+  --line-2: #D6CBAF;
+  --ink: #29251A;
+  --ink-2: #574F3D;
+  --ink-3: #786F5A;
+  --ink-4: #999078;
+  --stage: #1C1A14;
+  --stage-1: #29251A;
+  --stage-line: #49402B;
+  --stage-line-2: #65583A;
+  --stage-ink: #FBF7E9;
+  --stage-ink-2: #E1D6B8;
+  --stage-mute: #A89A75;
+  --shadow: 0 1px 2px rgba(41,37,26,.05), 0 8px 24px rgba(41,37,26,.05);
+}
+
+:root[data-theme="terra"] {
+  --brand: #C84D32;
+  --brand-600: #A83D27;
+  --brand-ink: #87321F;
+  --brand-050: #FFF0EA;
+  --brand-100: #F5D2C5;
+  --blue: #597A9E;
+  --blue-ink: #405F81;
+  --blue-050: #EEF4F8;
+  --bg: #F8F4F0;
+  --panel: #FFFEFC;
+  --panel-2: #FCF9F6;
+  --panel-3: #F1EAE4;
+  --line: #E8DCD3;
+  --line-2: #D8C6BA;
+  --ink: #2A211E;
+  --ink-2: #5B4941;
+  --ink-3: #7B675E;
+  --ink-4: #9B877E;
+  --stage: #201715;
+  --stage-1: #2D201D;
+  --stage-line: #503A34;
+  --stage-line-2: #6A4A40;
+  --stage-ink: #FBF3EF;
+  --stage-ink-2: #E3CDC4;
+  --stage-mute: #B29A90;
+  --shadow: 0 1px 2px rgba(42,33,30,.05), 0 8px 24px rgba(42,33,30,.05);
+}
+
+:root[data-theme="porcelain"] {
+  --brand: #2367D1;
+  --brand-600: #174EA9;
+  --brand-ink: #1C4F9A;
+  --brand-050: #EDF4FF;
+  --brand-100: #D1E2FF;
+  --blue: #2367D1;
+  --blue-ink: #174EA9;
+  --blue-050: #EDF4FF;
+  --bg: #F2F5F8;
+  --panel: #FFFFFF;
+  --panel-2: #FBFCFE;
+  --panel-3: #E8EDF2;
+  --line: #D5DEE7;
+  --line-2: #B8C7D5;
+  --ink: #172335;
+  --ink-2: #42536A;
+  --ink-3: #63778D;
+  --ink-4: #8294A6;
+  --stage: #111B26;
+  --stage-1: #192838;
+  --stage-line: #31475D;
+  --stage-line-2: #47637F;
+  --stage-ink: #F4F8FC;
+  --stage-ink-2: #CDDAE7;
+  --stage-mute: #98AEC2;
+  --shadow: 0 1px 2px rgba(23,35,53,.06), 0 8px 24px rgba(23,35,53,.06);
+}
+
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --brand: #55E6BC;
+  --brand-600: #2FC99F;
+  --brand-ink: #56E4BC;
+  --brand-050: #142B28;
+  --brand-100: #23443E;
+  --blue: #7CA7FF;
+  --blue-ink: #9CB9FF;
+  --blue-050: #1A2941;
+  --warn: #FFC663;
+  --warn-ink: #FFD58A;
+  --warn-050: #302819;
+  --danger: #FF7379;
+  --danger-ink: #FF9A9E;
+  --danger-050: #351F23;
+  --bg: #11161B;
+  --panel: #192127;
+  --panel-2: #1E282F;
+  --panel-3: #26323A;
+  --line: #303D46;
+  --line-2: #40515D;
+  --ink: #E8EEF2;
+  --ink-2: #C2CFD7;
+  --ink-3: #9AABB6;
+  --ink-4: #758691;
+  --stage: #0A0F13;
+  --stage-1: #111A20;
+  --stage-line: #2A3943;
+  --stage-line-2: #3A4D59;
+  --stage-ink: #F1F6F8;
+  --stage-ink-2: #CAD6DC;
+  --stage-mute: #8DA0AA;
+  --shadow: 0 1px 2px rgba(0,0,0,.18), 0 10px 28px rgba(0,0,0,.16);
+  --shadow-pop: 0 12px 34px rgba(0,0,0,.38), 0 2px 8px rgba(0,0,0,.2);
+}
+
+:root {
+  --duck-shell: #00AE42;
+  --duck-shell-line: #B8F0C8;
+  --duck-wing: #08742F;
+  --duck-accent: #FEC600;
+}
+
+@media (max-width: 1023px) {
+  :root { --gutter: 14px; }
+}
