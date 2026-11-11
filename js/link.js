@@ -7,6 +7,7 @@ const HB_MS = 1000;
 const CMD_TIMEOUT = 20000;
 const BACKOFF_MIN = 2000;
 const BACKOFF_MAX = 8000;
+const PROTOCOL_SUPPORTED = '>=1.0.0 <2.0.0';
 
 /* 协议把命令写成两段式 `模块.op` + `{op:"scan"}`（docs/10 §3.3）。
    imu / tof / fan / vision 两种写法都收；pad / ai / train / sys 只注册了
@@ -90,6 +91,12 @@ export class Link {
       this._backoff = BACKOFF_MIN;
       this._wasOpen = true;
       this.setStatus('open');
+      this._send({
+        t: 'client_hello',
+        client: 'zelux-studio',
+        version: '1.0.0',
+        protocol: { supported: PROTOCOL_SUPPORTED },
+      });
       this._startHeartbeat();
       this.ping();
     };
@@ -120,6 +127,10 @@ export class Link {
       }
       if (ev.code === 4403) {
         this.setStatus('denied', '来源校验没过：请用设备自己的地址打开页面');
+        return;
+      }
+      if (ev.code === 4406) {
+        this.setStatus('incompatible', 'Studio 与设备协议不兼容，请升级 Studio 或设备端');
         return;
       }
       if (this._stop) { this.setStatus('closed'); return; }
@@ -222,6 +233,10 @@ export class Link {
       for (const fn of [...this._eventSubs]) {
         try { fn(msg.name, msg.data || {}); } catch (err) { console.error('[link] event 订阅者出错', err); }
       }
+      return;
+    }
+    if (t === 'error' && msg.error?.code === 'protocol.incompatible') {
+      this.setStatus('incompatible', msg.error.message || 'Studio 与设备协议不兼容');
     }
   }
 
