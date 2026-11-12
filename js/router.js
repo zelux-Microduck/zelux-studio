@@ -12,6 +12,8 @@ export const ROUTES = [
   { path: '/ai', title: 'AI 语音', file: 'ai', focus: null, group: '智能', tab: true, icon: 'ai' },
   { path: '/train', title: '训练', file: 'train', focus: 'train', group: '智能', icon: 'train' },
   { path: '/logs', title: '日志', file: 'logs', focus: null, group: '系统', icon: 'logs' },
+  { path: '/drivers', title: '驱动管理', file: 'drivers', focus: 'drivers', group: '系统', icon: 'settings' },
+  { path: '/firmware', title: '固件管理', file: 'firmware', focus: 'firmware', group: '系统', icon: 'bolt' },
   { path: '/microduck', title: 'MicroDuck', file: 'microduck', focus: 'servos', group: '外观', icon: 'duck' },
   { path: '/settings', title: '设置', file: 'settings', focus: null, group: '系统', icon: 'settings' },
   { path: '/login', title: '登录', file: 'login', focus: null, group: '', hidden: true, icon: 'lock' },
@@ -21,7 +23,7 @@ export const ROUTES = [
 export const NAV_GROUPS = ['运行', '标定', '感知', '智能', '外观', '系统'];
 
 export const TAB_PATHS = ['/', '/servos', '/pad', '/ai'];
-export const MORE_PATHS = ['/imu', '/camera', '/tof', '/fan', '/train', '/logs', '/microduck', '/settings'];
+export const MORE_PATHS = ['/imu', '/camera', '/tof', '/fan', '/train', '/drivers', '/firmware', '/logs', '/microduck', '/settings'];
 
 export function info(path) {
   const clean = normalize(path);

@@ -874,6 +874,31 @@
   color: var(--ink-2);
 }
 
+/* ================================================================ 驱动 / 固件 */
+.driver-list, .firmware-list { display: flex; flex-direction: column; gap: 10px; }
+.driver-row, .firmware-row { border: 1px solid var(--line); border-radius: var(--r8); padding: 12px; background: var(--panel-2); }
+.driver-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 14px; align-items: center; }
+.driver-name { font-size: 13px; font-weight: 600; margin-top: 7px; }
+.driver-meta { font-size: 10.5px; color: var(--ink-4); margin-top: 2px; overflow-wrap: anywhere; }
+.driver-facts { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 8px; margin: 10px 0; }
+.driver-fact { min-width: 0; }
+.driver-fact span { display: block; color: var(--ink-4); font-size: 10.5px; }
+.driver-fact b { display: block; color: var(--ink-2); font-size: 11.5px; font-weight: 550; margin-top: 2px; overflow-wrap: anywhere; }
+.driver-actions { display: flex; flex-direction: column; gap: 7px; align-items: stretch; }
+.driver-select { width: 100%; }
+.firmware-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); gap: 14px; align-items: start; }
+.firmware-row + .firmware-row { margin-top: 2px; }
+.firmware-reasons { color: var(--danger-ink); font-size: 11.5px; display: flex; gap: 8px; flex-wrap: wrap; margin: 5px 0 9px; }
+.inbox-row, .check-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.inbox-row:last-child, .check-row:last-child { border-bottom: 0; }
+.check-row { justify-content: flex-start; }
+.progress { height: 7px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--brand-600); transition: width .2s ease; }
+@media (max-width: 899px) {
+  .driver-row, .firmware-grid { grid-template-columns: minmax(0, 1fr); }
+  .driver-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* ================================================================ 日志 */
 .log-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .log-filters { display: flex; gap: 4px; flex-wrap: wrap; }
