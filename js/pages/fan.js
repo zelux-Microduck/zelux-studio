@@ -49,6 +49,18 @@ export function page(ctx) {
     h('div.row', { style: { marginTop: '10px' } },
       btn('恢复默认', { size: 'sm', onClick: () => sendCurve([[58, 70], [64, 85], [70, 100]]) })));
 
+  const pinRows = [0, 1].map((i) => ({
+    pwm: h('input.input', { type: 'number', min: '0', max: '255', 'aria-label': `风扇${i} PWM` }),
+    gpio: h('input.input', { type: 'number', min: '0', max: '1023', 'aria-label': `风扇${i} GPIO` }),
+    tach: h('input.input', { type: 'number', min: '0', max: '1023', placeholder: '无', 'aria-label': `风扇${i} Tach GPIO` }),
+    pin: h('input.input', { placeholder: '板上引脚标记', 'aria-label': `风扇${i} 引脚标记` }),
+  }));
+  const pinCard = card({ title: '设备引脚', sub: '修改后重启生效；PWM 是控制通道，GPIO 是板级编号' },
+    ...pinRows.map((r, i) => h('div.pin-config-row', {}, h('strong', {}, i === 0 ? '顶部风扇' : '主板散热'),
+      h('label', {}, 'PWM', r.pwm), h('label', {}, 'GPIO', r.gpio), h('label', {}, 'Tach', r.tach), h('label', {}, '标记', r.pin))),
+    h('div.row', { style: { marginTop: '10px' } }, btn('保存引脚配置', { kind: 'primary', onClick: savePins }),
+      h('span.hint-line', {}, '保存不会立即改正在运行的 PWM。')));
+
   const pageEl = h('div.page', {},
     h('div.page-head', {},
       h('div', {},
@@ -56,9 +68,9 @@ export function page(ctx) {
         h('div.page-desc', '两路 PWM：顶部 PWM14 / 主板 PWM12。主板那颗带测速，顶部没有测速。')),
       h('div.page-head-actions', {}, h('span', { id: 'fan-chips' }))),
     h('div.fan-cards', {}, ...cards.map((c) => c.el)),
-    h('div.grid-2', {}, modeCard, curveCard));
+    h('div.grid-2', {}, modeCard, curveCard), pinCard);
 
-  el = { cards, seg, curveSvg, serverNote, chips: pageEl.querySelector('#fan-chips') };
+  el = { cards, seg, curveSvg, serverNote, pinRows, chips: pageEl.querySelector('#fan-chips') };
   drawCurve();
   return pageEl;
 }
@@ -113,6 +125,11 @@ function paint(ctx) {
   const items = fan.items || [];
   const available = fan.available !== false;
   const mode = fan.mode === 'manual' ? 'manual' : 'auto';
+  const configured = fan.pin_config?.channels || [];
+  el.pinRows?.forEach((row, i) => {
+    const value = configured[i] || {};
+    for (const key of ['pwm', 'gpio', 'tach', 'pin']) if (document.activeElement !== row[key]) row[key].value = value[key] ?? '';
+  });
 
   el.seg.querySelectorAll('button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
@@ -331,4 +348,11 @@ async function selfTest() {
       toast(res?.reason || '自检没过：转速没上来，检查供电和 4pin 线', 'error', 7000);
     }
   } catch { /* 已提示 */ }
+}
+
+async function savePins() {
+  const channels = el.pinRows.map((r, i) => ({ name: i === 0 ? '顶部风扇' : '主板散热',
+    pwm: r.pwm.value, gpio: r.gpio.value, tach: r.tach.value, pin: r.pin.value }));
+  const out = await ctxRef.run('fan.op', { op: 'pin_config', channels });
+  toast(out.note || '引脚配置已保存，重启后生效', 'ok', 5000);
 }

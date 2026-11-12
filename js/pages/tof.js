@@ -97,6 +97,12 @@ export function page(ctx) {
     h('div.stack', {}, stopInput.el, slowInput.el, sideInput.el),
     h('div.hint-line', { style: { marginTop: '8px' } },
       '中扇区 < 停车阈值 → 停；< 减速阈值 → 降到 40%；此时一侧明显更宽（> 侧宽）→ 往那边绕。'));
+  const busInput = h('input.input', { type: 'number', min: '0', max: '32', 'aria-label': 'I2C 总线' });
+  const addrInput = h('input.input.mono', { placeholder: '0x52', 'aria-label': 'I2C 地址' });
+  const pinCard = card({ title: '设备引脚', sub: 'ToF 使用 I²C；总线号对应 /dev/i2c-N' },
+    h('div.pin-config-row', {}, h('label', {}, 'I²C 总线', busInput), h('label', {}, '设备地址', addrInput)),
+    h('div.row', { style: { marginTop: '10px' } }, btn('保存引脚配置', { kind: 'primary', onClick: savePins }),
+      h('span.hint-line', {}, '重启后重新打开 ToF 设备。')));
 
   const pageEl = h('div.page', {},
     h('div.page-head', {},
@@ -106,12 +112,12 @@ export function page(ctx) {
       h('div.page-head-actions', {},
         btn('去训练', { onClick: () => ctx.go('/train') }))),
     h('div.tof-layout', {},
-      h('div.stack', {}, gridCard, paramCard),
+      h('div.stack', {}, gridCard, paramCard, pinCard),
       h('div.stack', {}, nearestCard, decisionCard)));
 
   el = {
     grid, nearest, validText, hzText, stateText, sensorText, decide, decideTxt, decideSub, decideDot,
-    sectorBox, avoidSwitch, reasonText, stopInput, slowInput, sideInput,
+    sectorBox, avoidSwitch, reasonText, stopInput, slowInput, sideInput, busInput, addrInput,
   };
   // 订阅状态总线：没有这一句，页面永远是"没有数据"（paint 定义了却没人调）。
   unsub = ctx.store.subscribe(() => paint(ctx));
@@ -157,6 +163,11 @@ function paint(ctx) {
   const tof = st.tof || {};
   const avoid = tof.avoid || {};
   const ready = tof.state === 'ready';
+  if (document.activeElement !== el.busInput) el.busInput.value = tof.pin_config?.i2c_bus ?? '';
+  if (document.activeElement !== el.addrInput) {
+    const address = tof.pin_config?.address;
+    el.addrInput.value = address == null ? '' : `0x${Number(address).toString(16).toUpperCase()}`;
+  }
 
   // 网格
   const dist = Array.isArray(tof.distance_mm) ? tof.distance_mm : [];
@@ -257,4 +268,9 @@ function sendCfg(patch) {
   ctx.cmd('tof.op', { op: 'config', ...patch })
     .then(() => toast('避障参数已更新', 'ok', 1800))
     .catch((err) => toast(err.message || String(err), 'error'));
+}
+
+async function savePins() {
+  const out = await ctxRef.run('tof.op', { op: 'pin_config', i2c_bus: el.busInput.value, address: el.addrInput.value });
+  toast(out.note || 'ToF 引脚配置已保存，重启后生效', 'ok', 5000);
 }

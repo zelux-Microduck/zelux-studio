@@ -94,7 +94,7 @@ export class Link {
       this._send({
         t: 'client_hello',
         client: 'zelux-studio',
-        version: '1.1.1',
+        version: '1.2.0',
         protocol: { supported: PROTOCOL_SUPPORTED },
       });
       this._startHeartbeat();
