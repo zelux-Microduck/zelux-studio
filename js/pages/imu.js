@@ -2,6 +2,7 @@
    步骤顺序和平放/前后左右的角度判据都由后端给（state.imu.wizard），前端不重算规矩。 */
 
 import { h, icon, btn, card, chip, fmt, get, DASH, note } from '../ui.js';
+import { createImuManagement } from './imu-management.js';
 
 let unsub = null;
 let ctxRef = null;
@@ -69,12 +70,14 @@ export function page(ctx) {
   const stateChip = h('div.row', {});
   const paramsBox = h('div.stack-8');
 
+  const management = createImuManagement(ctx);
   const pageEl = h('div.page', {},
     h('div.page-head', {},
       h('div', {},
         h('h1.page-title', 'IMU 方向'),
-        h('div.page-desc', '先采平放，再前后左右各倾一次。解算会同时检查模块装反了没有。')),
+        h('div.page-desc', '先确认型号与固定安装方向；独立 I2C 来源才使用下方采集向导。')),
       h('div.page-head-actions', {}, stateChip)),
+    management.element,
     h('div.imu-layout', {},
       h('div.stack', {}, postureCard, card({ title: '判定参数', sub: '和后端同名同值，前端更严' }, paramsBox)),
       h('div.stack', {}, wizardCard, resultCard)));
@@ -82,7 +85,7 @@ export function page(ctx) {
   el = {
     bubbleDot, rollText, pitchText, yawText, needle, bigBtn, subText, whyText,
     stepsBox, beforeBig, afterBig, beforeSm, afterSm, deltaLine, checksBox, writeBtn,
-    stateChip, paramsBox,
+    stateChip, paramsBox, management,
   };
   return pageEl;
 }
@@ -97,6 +100,7 @@ export function unmount() {
   if (unsub) unsub();
   unsub = null;
   ctxRef = null;
+  el.management?.dispose();
   el = {};
   solving = false;
 }
@@ -105,6 +109,7 @@ export function unmount() {
 function paint(ctx) {
   const st = ctx.state() || {};
   const imu = st.imu || {};
+  el.management.paint(imu.management || {});
   const wiz = imu.wizard || {};
   const ok = imu.ok === true;
 
@@ -203,6 +208,12 @@ function paint(ctx) {
     el.deltaLine.textContent = '还没解算过。';
     el.checksBox.replaceChildren(h('div.hint-line', {}, '开始采集后，这里会显示四个方向是否都对。'));
     el.writeBtn.disabled = true;
+  }
+  if (wiz.enabled === false) {
+    el.bigBtn.disabled = true;
+    el.writeBtn.disabled = true;
+    el.subText.textContent = 'robotd 管理的 IMU：本向导不可用，不会修改机体安装变换';
+    el.stateChip.replaceChildren(chip('robotd 管理'), chip(imu.management?.ready ? '传感器就绪' : '健康状态见型号管理', imu.management?.ready ? 'ok' : 'warn'));
   }
 }
 

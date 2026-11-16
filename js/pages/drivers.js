@@ -33,10 +33,12 @@ export function unmount() {
 function paint() {
   if (!ctxRef || !listEl) return;
   const data = ctxRef.state()?.drivers || {};
+  // This list is Agent HAL only; robotd owns its own bus IMU adapter. See IMU page.
   const active = data.items || [];
   const available = data.available || [];
   const pending = data.pending || {};
   summaryEl.replaceChildren(
+    chip('Agent HAL 驱动（总线 IMU 请在 IMU 页配置）'),
     chip(`Driver API ${data.api_version || DASH}`),
     chip(`${active.length}/5 类设备`, active.length === 5 ? 'ok' : 'warn'),
     data.restart_required ? chip('待重启生效', 'warn') : chip('配置已生效', 'ok'));
