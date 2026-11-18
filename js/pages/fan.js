@@ -1,5 +1,4 @@
-/* 风扇页：两路 PWM + 转速表 + 温控曲线。
-   手动滑块 300 ms 节流；曲线用 SVG 折线，三个点可拖（温度→转速，阶梯判据）。 */
+/* 风扇页：按型号驱动实例数量动态展示/管理；硬件状态由 zelux-fan 服务提供。 */
 
 import {
   h, icon, btn, card, chip, fmt, get, DASH, throttle, toast, svg,
@@ -16,18 +15,20 @@ let ctxRef = null;
 let el = {};
 let curve = [[58, 70], [64, 85], [70, 100]];
 let dragging = -1;
+const cardsById = new Map();
+const editorById = new Map();
+const draftById = new Map();
+let draftCounter = 0;
 
 export function page(ctx) {
   ctxRef = ctx;
   dragging = -1;
 
-  /* ---------------- 两张卡 ---------------- */
-  const cards = [0, 1].map((i) => fanCard(i));
+  const cardsHost = h('div.fan-cards', {});
 
   /* ---------------- 模式 ---------------- */
   const seg = h('div.seg', { role: 'group', 'aria-label': '风扇模式' },
-    h('button', { type: 'button', 'data-mode': 'auto', 'aria-pressed': 'false' }, '自动（曲线）'),
-    h('button', { type: 'button', 'data-mode': 'manual', 'aria-pressed': 'false' }, '手动'));
+    h('button', { type: 'button', 'data-mode': 'auto', 'aria-pressed': 'false' }, '全部恢复自动（清除手动覆盖）'));
   seg.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mode]');
     if (!b) return;
@@ -38,44 +39,41 @@ export function page(ctx) {
   const modeCard = card({ title: '模式', sub: '重启后回到自动，避免忘记手动全速' },
     h('div.row-between', {}, seg, selfTestBtn),
     h('div.hint-line', { style: { marginTop: '8px' } },
-      '自动：按曲线每 2 秒判一次。手动：锁在你给的值，直到切回自动。'));
+      '自动按温控曲线运行；每张卡片的滑块只临时覆盖该实例，到期恢复自动。重启清除覆盖。'));
 
   /* ---------------- 曲线 ---------------- */
   const curveSvg = svg('svg', { class: 'curve-svg', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '温控曲线' });
   const serverNote = h('div.hint-line', {});
+  const resetCurveBtn = btn('恢复默认', { size: 'sm', onClick: () => sendCurve([[58, 70], [64, 85], [70, 100]]) });
   const curveCard = card({ title: '温控曲线', sub: '拖三个点：温度 → 转速' },
     h('div.curve-wrap', {}, curveSvg),
     serverNote,
-    h('div.row', { style: { marginTop: '10px' } },
-      btn('恢复默认', { size: 'sm', onClick: () => sendCurve([[58, 70], [64, 85], [70, 100]]) })));
+    h('div.row', { style: { marginTop: '10px' } }, resetCurveBtn));
 
-  const pinRows = [0, 1].map((i) => ({
-    pwm: h('input.input', { type: 'number', min: '0', max: '255', 'aria-label': `风扇${i} PWM` }),
-    gpio: h('input.input', { type: 'number', min: '0', max: '1023', 'aria-label': `风扇${i} GPIO` }),
-    tach: h('input.input', { type: 'number', min: '0', max: '1023', placeholder: '无', 'aria-label': `风扇${i} Tach GPIO` }),
-    pin: h('input.input', { placeholder: '板上引脚标记', 'aria-label': `风扇${i} 引脚标记` }),
-  }));
-  const pinCard = card({ title: '设备引脚', sub: '修改后重启生效；PWM 是控制通道，GPIO 是板级编号' },
-    ...pinRows.map((r, i) => h('div.pin-config-row', {}, h('strong', {}, i === 0 ? '顶部风扇' : '主板散热'),
-      h('label', {}, 'PWM', r.pwm), h('label', {}, 'GPIO', r.gpio), h('label', {}, 'Tach', r.tach), h('label', {}, '标记', r.pin))),
-    h('div.row', { style: { marginTop: '10px' } }, btn('保存引脚配置', { kind: 'primary', onClick: savePins }),
-      h('span.hint-line', {}, '保存不会立即改正在运行的 PWM。')));
+  const instanceHost = h('div.fan-instance-list', {});
+  const addBtn = btn('添加风扇实例', { kind: 'primary', onClick: addInstance });
+  const pinCard = card({ title: '风扇实例与引脚', sub: '同一型号驱动可创建多个实例；引脚由实例配置' },
+    instanceHost, h('div.row', { style: { marginTop: '10px' } }, addBtn),
+    h('div.hint-line', { style: { marginTop: '8px' } },
+      '删除会停止该风扇并释放服务持有的 PWM/GPIO；请先确认不会影响散热。'));
 
   const pageEl = h('div.page', {},
     h('div.page-head', {},
       h('div', {},
         h('h1.page-title', '风扇'),
-        h('div.page-desc', '两路 PWM：顶部 PWM14 / 主板 PWM12。主板那颗带测速，顶部没有测速。')),
+        h('div.page-desc', '数量由设备实例配置决定；自动温控和 PWM 控制由设备端风扇服务统一管理。')),
       h('div.page-head-actions', {}, h('span', { id: 'fan-chips' }))),
-    h('div.fan-cards', {}, ...cards.map((c) => c.el)),
+    cardsHost,
     h('div.grid-2', {}, modeCard, curveCard), pinCard);
 
-  el = { cards, seg, curveSvg, serverNote, pinRows, chips: pageEl.querySelector('#fan-chips') };
+  el = { cardsHost, instanceHost, addBtn, seg, curveSvg, serverNote, selfTestBtn, resetCurveBtn,
+    chips: pageEl.querySelector('#fan-chips') };
   drawCurve();
   return pageEl;
 }
 
-function fanCard(index) {
+function fanCard(instance) {
+  const id = instance.id;
   const pct = h('span.live-num', {}, DASH);
   const rpm = h('div.sub', {}, DASH);
   const temp = h('div.sub', {}, '');
@@ -83,24 +81,24 @@ function fanCard(index) {
   const slider = h('input', {
     type: 'range', min: '0', max: '100', step: '5', value: '60',
     style: { width: '100%', marginTop: '8px' },
-    'aria-label': `风扇 ${index} 手动转速`,
+    'aria-label': `${instance.name || id} 手动转速`,
   });
   const fire = throttle((v) => {
-    ctxRef.cmd('fan.op', { op: 'manual', index, pct: v })
+    ctxRef.cmd('fan.op', { op: 'manual', instance_id: id, pct: v })
       .then(() => { /* 状态会回来，不乐观更新 */ })
       .catch((err) => toast(err.message || String(err), 'error'));
   }, 300);
   slider.addEventListener('input', () => fire(Number(slider.value)));
 
   const cardEl = h('div.fan-card', {},
-    h('div.hd', {}, h('div', {}, h('div.nm', index === 0 ? '顶部风扇' : '主板散热'), pin),
-      h('span', { class: 'chip' }, `#${index}`)),
+    h('div.hd', {}, h('div', {}, h('div.nm', instance.name || id), pin),
+      h('span', { class: 'chip' }, id)),
     h('div.big', {}, pct, h('span.unit', '%')),
     rpm, temp,
     slider,
-    h('div.hint-line', { style: { marginTop: '4px' } }, index === 1 ? '4pin，带转速表' : '2pin，无测速'));
+    h('div.hint-line', { style: { marginTop: '4px' } }, instance.tach_gpio == null ? '未配置测速输入' : `测速 GPIO${instance.tach_gpio}`));
 
-  return { el: cardEl, pct, rpm, temp, pin, slider, index };
+  return { el: cardEl, pct, rpm, temp, pin, slider, id };
 }
 
 export function mount(ctx) {
@@ -116,6 +114,8 @@ export function unmount() {
   ctxRef = null;
   el = {};
   dragging = -1;
+  editorById.clear();
+  draftById.clear();
 }
 
 /* ---------------------------------------------------------------- 状态 */
@@ -125,35 +125,68 @@ function paint(ctx) {
   const items = fan.items || [];
   const available = fan.available !== false;
   const mode = fan.mode === 'manual' ? 'manual' : 'auto';
-  const configured = fan.pin_config?.channels || [];
-  el.pinRows?.forEach((row, i) => {
-    const value = configured[i] || {};
-    for (const key of ['pwm', 'gpio', 'tach', 'pin']) if (document.activeElement !== row[key]) row[key].value = value[key] ?? '';
+  const inventory = fan.inventory || {};
+  const instances = Array.isArray(inventory.instances)
+    ? inventory.instances
+    : (fan.pin_config?.instances || []);
+
+  // Include drafts with live instances (drafts come first to show at top)
+  const allInstances = [...draftById.values(), ...instances.filter((i) => !draftById.has(i.id))];
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  cardsById.clear();
+
+  const disabled = !available || !ctx.link.online;
+
+  const cards = allInstances.map((instance) => {
+    const parts = fanCard(instance);
+    const item = itemById.get(instance.id) || {};
+    const p = item.why ? DASH : (item.pct ?? DASH);
+    parts.pct.replaceChildren(h('span.live-num', p === DASH ? DASH : fmt.int(p)), h('span.unit', '%'));
+    parts.rpm.textContent = item.rpm == null ? '转速 —（无测速数据）' : `${fmt.int(item.rpm)} RPM`;
+    parts.temp.textContent = `温度 ${fan.temp == null ? DASH : fmt.deg(fan.temp)}`;
+    parts.pin.textContent = item.path || (instance.pwm
+      ? `PWM${instance.pwm.chip}/${instance.pwm.channel}` : '引脚未配置');
+    parts.slider.value = String(p === DASH ? 0 : Math.round(Number(p)));
+    parts.slider.disabled = disabled || instance.enabled === false || !!instance._draft || !!item.why;
+    parts.temp.textContent += instance.enabled === false ? ' · 已禁用' : item.why
+      ? ' · ' + item.why : item.control_mode === 'manual' ? ' · 手动覆盖' : ' · 自动温控';
+    cardsById.set(instance.id, parts);
+    return parts.el;
   });
+
+  if (allInstances.length === 0) {
+    el.cardsHost.replaceChildren(h('div.empty-state', {},
+      h('div.hint-line', {}, available ? '尚无风扇实例。请在下方添加。' : '风扇控制器不可用，无法创建实例。')));
+  } else {
+    el.cardsHost.replaceChildren(...cards);
+  }
+
+  el.instanceHost.replaceChildren(...allInstances.map((inst) => renderInstanceEditor(inst, disabled)));
+
+  // Clean up editors for instances that no longer exist
+  const instanceIds = new Set(allInstances.map((i) => i.id));
+  for (const [id] of editorById) {
+    if (!instanceIds.has(id)) editorById.delete(id);
+  }
+
+  if (instances.length === 0 && !available) {
+    el.addBtn.disabled = true;
+  } else {
+    el.addBtn.disabled = disabled;
+  }
 
   el.seg.querySelectorAll('button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+    b.disabled = disabled;
   });
 
-  el.cards.forEach((c, i) => {
-    const it = items[i] || {};
-    const p = it.pct ?? (i === 0 ? fan.pct : null);
-    c.pct.replaceChildren(h('span.live-num', p == null ? DASH : fmt.int(p)), h('span.unit', '%'));
-    c.rpm.textContent = it.rpm == null
-      ? '转速 —（这颗没有测速）'
-      : `${fmt.int(it.rpm)} RPM${it.tach_hz != null ? ` · ${fmt.f1(it.tach_hz)} Hz` : ''}`;
-    c.temp.textContent = `温度 ${fan.temp == null ? DASH : fmt.deg(fan.temp)}`;
-    c.pin.textContent = it.pwm != null
-      ? `PWM${it.pwm} · GPIO${it.gpio ?? '—'}${it.name ? ` · ${it.name}` : ''}`
-      : (it.name || '—');
-    const val = p == null ? 0 : Math.round(p);
-    if (document.activeElement !== c.slider) c.slider.value = String(val);
-    c.slider.disabled = !available || !ctx.link.online;
-    c.slider.title = available ? '' : '这台机器没有真风扇，手动值只是演示';
-  });
+  if (el.selfTestBtn) el.selfTestBtn.disabled = disabled;
+  if (el.resetCurveBtn) el.resetCurveBtn.disabled = disabled;
 
   const chips = [];
   chips.push(chip(mode === 'auto' ? '自动' : '手动', mode === 'auto' ? 'ok' : 'warn'));
+  const unavailableCount = items.filter((item) => item.hardware_available === false || item.why).length;
+  if (unavailableCount) chips.push(chip(unavailableCount + ' 个实例硬件不可用', 'danger'));
   if (!available) chips.push(chip('没有风扇控制器', 'danger'));
   if (fan.virtual) chips.push(chip('手动值是演示值', 'warn'));
   if (fan.source) chips.push(chip(fan.source === 'hal' ? 'HAL 直连' : fan.source));
@@ -180,6 +213,172 @@ function paint(ctx) {
     }
   }
   drawCurve(fan.temp);
+}
+
+function field(label, value, type = 'text', attrs = {}) {
+  const input = h('input', { type, value: value ?? '', ...attrs });
+  return { input, el: h('label.fan-field', {}, h('span', label), input) };
+}
+
+function renderInstanceEditor(instance, disabled = false) {
+  const existing = editorById.get(instance.id);
+  if (existing) {
+    // Reuse existing editor for all existing IDs - preserve user edits
+    const row = existing.row;
+    const fields = existing.fields;
+    // ID field is immutable for persisted instances (not drafts)
+    fields.id.input.disabled = !instance._draft;
+    // Other fields reflect current network state
+    Object.entries(fields).forEach(([key, f]) => {
+      if (key !== 'id') f.input.disabled = disabled;
+    });
+    existing.saveBtn.disabled = disabled;
+    existing.removeBtn.disabled = disabled;
+    existing.original = instance;
+    existing.toggleBtn.disabled = disabled || !!instance._draft;
+    existing.toggleBtn.textContent = instance.enabled === false ? '启用实例' : '禁用实例';
+    return row;
+  }
+
+  const pwm = instance.pwm || {};
+  const fields = {
+    id: field('实例 ID', instance.id, 'text', { maxlength: '64', disabled: !instance._draft }),
+    name: field('显示名称', instance.name, 'text', { maxlength: '64' }),
+    chip: field('PWM 芯片号', pwm.chip ?? '', 'number', { min: '0', max: '255' }),
+    channel: field('PWM 通道号', pwm.channel ?? '', 'number', { min: '0', max: '255' }),
+    tach_gpio: field('测速 GPIO（可选）', instance.tach_gpio ?? '', 'number', { min: '0', max: '65535' }),
+    period_ns: field('周期 ns', instance.period_ns || 40000, 'number', { min: '1000', max: '10000000' }),
+    pulses_per_rev: field('每转脉冲数', instance.pulses_per_rev || 2, 'number', { min: '1', max: '16' }),
+  };
+  const removeBtn = btn('删除实例', { size: 'sm', onClick: () => deleteInstance(instance.id) });
+  const saveBtn = btn('保存实例', { kind: 'primary', size: 'sm', onClick: () => saveInstance(instance, fields) });
+  const toggleBtn = btn(instance.enabled === false ? '启用实例' : '禁用实例', {
+    size: 'sm', onClick: () => toggleInstance(instance.id),
+  });
+  toggleBtn.disabled = disabled || !!instance._draft;
+  removeBtn.disabled = disabled;
+  saveBtn.disabled = disabled;
+  // ID field already set immutable above; other fields follow network state
+  Object.entries(fields).forEach(([key, f]) => {
+    if (key !== 'id') f.input.disabled = disabled;
+  });
+  const row = card({ title: instance.name || instance.id, sub: `型号驱动：${instance.driver_id}` },
+    h('div.fan-instance-fields', {}, ...Object.values(fields).map((part) => part.el)),
+    h('div.row', { style: { marginTop: '10px' } }, saveBtn, toggleBtn, removeBtn));
+
+  editorById.set(instance.id, { row, fields, saveBtn, removeBtn, toggleBtn, original: instance });
+  return row;
+}
+
+function readInstance(instance, fields) {
+  const value = (name) => fields[name].input.value.trim();
+  const optionalNumber = (name) => {
+    const v = value(name);
+    if (v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const requiredNumber = (name) => {
+    const v = value(name);
+    if (v === '') return NaN;
+    return Number(v);
+  };
+  const period = Number(value('period_ns'));
+  const pulses = Number(value('pulses_per_rev'));
+  return {
+    id: value('id'),
+    name: value('name'),
+    driver_id: instance.driver_id || 'zelux.fan.radxa-pwm',
+    enabled: instance.enabled !== false,
+    pwm: { chip: requiredNumber('chip'), channel: requiredNumber('channel') },
+    period_ns: Number.isFinite(period) ? period : NaN,
+    tach_gpio: optionalNumber('tach_gpio'),
+    pulses_per_rev: Number.isFinite(pulses) ? pulses : NaN,
+  };
+}
+
+async function saveInstance(original, fields) {
+  original = editorById.get(original.id)?.original || original;
+  const instance = readInstance(original, fields);
+  if (!instance.id || !instance.name) {
+    toast('请填写有效的实例 ID 和名称。', 'warn');
+    return;
+  }
+  if (!Number.isFinite(instance.pwm.chip) || !Number.isFinite(instance.pwm.channel)) {
+    toast('请填写有效的 PWM 芯片和通道号。', 'warn');
+    return;
+  }
+  if (!Number.isFinite(instance.period_ns) || instance.period_ns < 1000 || instance.period_ns > 10000000) {
+    toast('请填写有效的周期（1000–10000000 ns）。', 'warn');
+    return;
+  }
+  if (instance.tach_gpio != null && (instance.tach_gpio < 0 || instance.tach_gpio > 65535)) {
+    toast('测速 GPIO 必须在 0–65535 范围内。', 'warn');
+    return;
+  }
+  if (!Number.isFinite(instance.pulses_per_rev) || instance.pulses_per_rev < 1 || instance.pulses_per_rev > 16) {
+    toast('每转脉冲数必须在 1–16 范围内。', 'warn');
+    return;
+  }
+  try {
+    const op = original._draft ? 'instance_create' : 'instance_update';
+    await ctxRef.run('fan.op', { op, instance_id: original.id, instance });
+    draftById.delete(original.id);
+    editorById.delete(original.id);
+    toast('风扇实例已保存并由服务应用。', 'ok');
+  } catch (err) { toast(err.message || String(err), 'error'); }
+}
+
+async function toggleInstance(instanceId) {
+  const instance = editorById.get(instanceId)?.original;
+  if (!instance || instance._draft) return;
+  const enabled = instance.enabled === false;
+  if (!enabled && !window.confirm('禁用会立即停止该风扇，请确认设备仍有足够散热。')) return;
+  try {
+    await ctxRef.run('fan.op', { op: enabled ? 'instance_enable' : 'instance_disable', instance_id: instanceId });
+    toast(enabled ? '实例已启用，自动温控已接管。' : '实例已禁用，输出已停止。', 'ok');
+  } catch (err) { toast(err.message || String(err), 'error'); }
+}
+
+async function deleteInstance(instanceId) {
+  if (draftById.has(instanceId)) {
+    draftById.delete(instanceId);
+    editorById.delete(instanceId);
+    paint(ctxRef);
+    return;
+  }
+  const item = ctxRef?.state()?.fan?.items?.find((fan) => fan.id === instanceId);
+  const label = item?.name || instanceId;
+  if (!window.confirm(`删除实例”${label}”？\n\n该实例会立即停止，风扇服务持有的 PWM/GPIO 将被释放。\n请确认设备仍有足够散热。`)) return;
+  try {
+    const response = await ctxRef.run('fan.op', { op: 'instance_delete', instance_id: instanceId, confirm: true });
+    draftById.delete(instanceId);
+    editorById.delete(instanceId);
+    const released = response?.result?.released || [];
+    if (released.some((entry) => entry.ok === false)) {
+      toast('服务报告资源释放失败，请检查服务状态后重试。', 'error');
+      return;
+    }
+    if (released.length === 0) {
+      toast('实例已删除（无服务持有的资源）。', 'ok');
+    } else {
+      const details = released.map((r) => {
+        const status = r.ok === false ? '释放失败：' + (r.error || '未知原因')
+          : r.unexported ? '已释放' : r.stopped ? '已停止，保留内核资源' : '未确认停止';
+        return `${r.resource}（${status}）`;
+      }).join('、');
+      toast(`实例已删除；释放资源：${details}`, 'ok', 6000);
+    }
+  } catch (err) { toast(err.message || String(err), 'error'); }
+}
+
+function addInstance() {
+  const id = `fan-${Date.now().toString(36)}-${(++draftCounter).toString(36)}`;
+  const draft = { id, name: '新风扇', driver_id: 'zelux.fan.radxa-pwm', enabled: true,
+    pwm: { chip: '', channel: '' }, period_ns: 40000,
+    tach_gpio: null, pulses_per_rev: 2, _draft: true };
+  draftById.set(id, draft);
+  paint(ctxRef);
 }
 
 /* ---------------------------------------------------------------- 曲线绘制 */
@@ -317,12 +516,31 @@ function bindCurveDrag(ctx) {
 function setMode(mode) {
   const ctx = ctxRef;
   if (!ctx) return;
-  const args = mode === 'auto'
-    ? { op: 'auto' }
-    : { op: 'manual', index: 0, pct: Number(el.cards[0]?.slider?.value ?? 60) };
-  ctx.run('fan.op', args)
-    .then(() => toast(mode === 'auto' ? '已切自动' : '已切手动（只作用在 0 号风扇）', 'ok', 2200))
-    .catch(() => {});
+
+  if (mode === 'auto') {
+    ctx.run('fan.op', { op: 'auto' })
+      .then(() => toast('已切自动', 'ok', 2200))
+      .catch(() => {});
+  } else {
+    // Manual mode: use the first available instance
+    const fan = ctx.state()?.fan || {};
+    const instances = Array.isArray(fan.inventory?.instances)
+      ? fan.inventory.instances
+      : (fan.pin_config?.instances || []);
+
+    if (instances.length === 0) {
+      toast('没有风扇实例，请先添加实例。', 'warn');
+      return;
+    }
+
+    const firstInstance = instances[0];
+    const card = cardsById.get(firstInstance.id);
+    const pct = card?.slider?.value ?? 60;
+
+    ctx.run('fan.op', { op: 'manual', instance_id: firstInstance.id, pct: Number(pct) })
+      .then(() => toast(`已切手动（实例 ${firstInstance.id}）`, 'ok', 2200))
+      .catch(() => {});
+  }
 }
 
 function sendCurve(next) {
@@ -339,7 +557,7 @@ async function selfTest() {
   const ctx = ctxRef;
   if (!ctx) return;
   try {
-    const res = await ctx.run('fan.op', { op: 'self_test' }, { timeout: 15000 });
+    const res = await ctx.run('fan.op', { op: 'self_test' }, { timeout: 60000 });
     if (res?.ok === null || res?.available === false) {
       toast(res.reason || '这台机器没法自检', 'warn', 6000);
     } else if (res?.ok) {
@@ -348,11 +566,4 @@ async function selfTest() {
       toast(res?.reason || '自检没过：转速没上来，检查供电和 4pin 线', 'error', 7000);
     }
   } catch { /* 已提示 */ }
-}
-
-async function savePins() {
-  const channels = el.pinRows.map((r, i) => ({ name: i === 0 ? '顶部风扇' : '主板散热',
-    pwm: r.pwm.value, gpio: r.gpio.value, tach: r.tach.value, pin: r.pin.value }));
-  const out = await ctxRef.run('fan.op', { op: 'pin_config', channels });
-  toast(out.note || '引脚配置已保存，重启后生效', 'ok', 5000);
 }
