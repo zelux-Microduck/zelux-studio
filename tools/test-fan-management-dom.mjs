@@ -4,11 +4,12 @@ class Element {
   constructor(tag = '') {
     this.tagName = tag; this.children = []; this.events = {}; this.style = {};
     this.dataset = {}; this.attributes = {}; this.value = ''; this.className = '';
+    this.parentNode = null; this.disabled = false;
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   set value(val) { this._value = String(val); }
   get value() { return this._value; }
-  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  replaceChildren(...nodes) { this.children.forEach(node => { node.parentNode = null; }); this.children = []; this.append(...nodes); }
   addEventListener(name, fn) { this.events[name] = fn; }
   setAttribute(key, val) { this.attributes[key] = val; if (key === 'id') this.id = val; }
   set textContent(val) { this.text = String(val); this.children = []; }
@@ -40,6 +41,11 @@ const ctx = { link: { online: true }, state: () => state,
   cmd: async (name, args) => { calls.push([name, args]); return {}; } };
 const root = fanPage.page(ctx);
 fanPage.mount(ctx);
+const firstRange = root.querySelectorAll('input').find(n => n.attributes.type === 'range');
+const nameInput = root.querySelectorAll('input').find(n => n.attributes.type === 'text');
+const editorSave = all(root).find(n => n.tagName === 'button' && n.textContent === '保存实例');
+const editorSaveParent = editorSave.parentNode;
+nameInput.value = 'unsaved local edit';
 const button = text => all(root).find(n => n.tagName === 'button' && n.textContent === text);
 await button('禁用实例').events.click();
 assert.equal(calls.at(-1)[1].op, 'instance_disable');
@@ -47,6 +53,13 @@ assert.equal(calls.at(-1)[1].instance_id, 'main');
 state = { fan: { ...state.fan, inventory: { instances: [{ ...instance, enabled: false }] }, items: [] } };
 notify();
 assert.equal(root.querySelectorAll('input').find(n => n.attributes.type === 'range').disabled, true);
+assert.equal(root.querySelectorAll('input').find(n => n.attributes.type === 'range'), firstRange,
+  'polling must preserve live fan-card node identity');
+assert.equal(root.querySelectorAll('input').find(n => n.attributes.type === 'text'), nameInput,
+  'polling must preserve editor input node identity');
+assert.equal(nameInput.value, 'unsaved local edit', 'polling must not overwrite an in-progress edit');
+assert.equal(editorSave.parentNode, editorSaveParent,
+  'polling must keep the existing editor row in place');
 await button('启用实例').events.click();
 assert.equal(calls.at(-1)[1].op, 'instance_enable');
 await button('保存实例').events.click();

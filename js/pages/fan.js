@@ -90,15 +90,18 @@ function fanCard(instance) {
   }, 300);
   slider.addEventListener('input', () => fire(Number(slider.value)));
 
+  const name = h('div.nm', instance.name || id);
+  const tachHint = h('div.hint-line', { style: { marginTop: '4px' } },
+    instance.tach_gpio == null ? '未配置测速输入' : `测速 GPIO${instance.tach_gpio}`);
   const cardEl = h('div.fan-card', {},
-    h('div.hd', {}, h('div', {}, h('div.nm', instance.name || id), pin),
+    h('div.hd', {}, h('div', {}, name, pin),
       h('span', { class: 'chip' }, id)),
     h('div.big', {}, pct, h('span.unit', '%')),
     rpm, temp,
     slider,
-    h('div.hint-line', { style: { marginTop: '4px' } }, instance.tach_gpio == null ? '未配置测速输入' : `测速 GPIO${instance.tach_gpio}`));
+    tachHint);
 
-  return { el: cardEl, pct, rpm, temp, pin, slider, id };
+  return { el: cardEl, pct, rpm, temp, pin, slider, id, name, tachHint };
 }
 
 export function mount(ctx) {
@@ -133,12 +136,16 @@ function paint(ctx) {
   // Include drafts with live instances (drafts come first to show at top)
   const allInstances = [...draftById.values(), ...instances.filter((i) => !draftById.has(i.id))];
   const itemById = new Map(items.map((item) => [item.id, item]));
-  cardsById.clear();
-
   const disabled = !available || !ctx.link.online;
 
   const cards = allInstances.map((instance) => {
-    const parts = fanCard(instance);
+    let parts = cardsById.get(instance.id);
+    if (!parts) {
+      parts = fanCard(instance);
+      cardsById.set(instance.id, parts);
+    }
+    parts.name.textContent = instance.name || instance.id;
+    parts.tachHint.textContent = instance.tach_gpio == null ? '未配置测速输入' : `测速 GPIO${instance.tach_gpio}`;
     const item = itemById.get(instance.id) || {};
     const p = item.why ? DASH : (item.pct ?? DASH);
     parts.pct.replaceChildren(h('span.live-num', p === DASH ? DASH : fmt.int(p)), h('span.unit', '%'));
@@ -146,22 +153,35 @@ function paint(ctx) {
     parts.temp.textContent = `温度 ${fan.temp == null ? DASH : fmt.deg(fan.temp)}`;
     parts.pin.textContent = item.path || (instance.pwm
       ? `PWM${instance.pwm.chip}/${instance.pwm.channel}` : '引脚未配置');
-    parts.slider.value = String(p === DASH ? 0 : Math.round(Number(p)));
+    // Keep a live drag/focus stable while periodic state snapshots arrive.
+    if (document.activeElement !== parts.slider) {
+      parts.slider.value = String(p === DASH ? 0 : Math.round(Number(p)));
+    }
     parts.slider.disabled = disabled || instance.enabled === false || !!instance._draft || !!item.why;
     parts.temp.textContent += instance.enabled === false ? ' · 已禁用' : item.why
       ? ' · ' + item.why : item.control_mode === 'manual' ? ' · 手动覆盖' : ' · 自动温控';
-    cardsById.set(instance.id, parts);
     return parts.el;
   });
 
+  const desiredCardIds = allInstances.map((i) => i.id);
+  for (const id of cardsById.keys()) {
+    if (!desiredCardIds.includes(id)) cardsById.delete(id);
+  }
+
   if (allInstances.length === 0) {
-    el.cardsHost.replaceChildren(h('div.empty-state', {},
-      h('div.hint-line', {}, available ? '尚无风扇实例。请在下方添加。' : '风扇控制器不可用，无法创建实例。')));
-  } else {
+    const emptyMessage = available ? '尚无风扇实例。请在下方添加。' : '风扇控制器不可用，无法创建实例。';
+    if (!el.cardsHost._fanEmpty) {
+      el.cardsHost._fanEmpty = h('div.empty-state', {}, h('div.hint-line', {}, emptyMessage));
+    } else {
+      el.cardsHost._fanEmpty.firstChild.textContent = emptyMessage;
+    }
+    if (el.cardsHost.firstChild !== el.cardsHost._fanEmpty) el.cardsHost.replaceChildren(el.cardsHost._fanEmpty);
+  } else if (!sameChildren(el.cardsHost, cards)) {
     el.cardsHost.replaceChildren(...cards);
   }
 
-  el.instanceHost.replaceChildren(...allInstances.map((inst) => renderInstanceEditor(inst, disabled)));
+  const editors = allInstances.map((inst) => renderInstanceEditor(inst, disabled));
+  if (!sameChildren(el.instanceHost, editors)) el.instanceHost.replaceChildren(...editors);
 
   // Clean up editors for instances that no longer exist
   const instanceIds = new Set(allInstances.map((i) => i.id));
@@ -338,6 +358,11 @@ async function toggleInstance(instanceId) {
     await ctxRef.run('fan.op', { op: enabled ? 'instance_enable' : 'instance_disable', instance_id: instanceId });
     toast(enabled ? '实例已启用，自动温控已接管。' : '实例已禁用，输出已停止。', 'ok');
   } catch (err) { toast(err.message || String(err), 'error'); }
+}
+
+function sameChildren(parent, desired) {
+  if (parent.children.length !== desired.length) return false;
+  return desired.every((node, index) => parent.children[index] === node);
 }
 
 async function deleteInstance(instanceId) {

@@ -55,7 +55,7 @@ export function page(ctx) {
   const commitBtn = btn('写入主控', { kind: 'primary', onClick: () => openCommit(ctx) });
   commitBar.append(icon('check', 15), h('span.grow', {}, '四项都齐了：预览要写的内容，再一次写进主控。'), commitBtn);
 
-  const checkCard = card({ title: '上手清单', sub: '按顺序做，前三项完成就能一次写入' }, checkGrid, commitBar);
+  const checkCard = card({ title: '设备状态与待办', sub: '实时状态独立显示；标定、配置和接管是另外的待办' }, checkGrid, commitBar);
 
   /* ---------------- 仪表带 ---------------- */
   const gauges = h('div.gauges');
@@ -239,6 +239,12 @@ function paintChecklist(ctx, st) {
   const solved = wizard.result && wizard.result.ok;
   const imuDone = Boolean(imu.calibrated);
   const imuSteps = (wizard.steps || []).filter((s) => s.done).length;
+  const imuManagement = imu.management || {};
+  const imuReady = imu.device_ready === true || imu.ok === true
+    || (get(imuManagement, 'available') === true
+      && get(imuManagement, 'simulated') !== true
+      && get(imuManagement, 'sensor.ready') === true);
+  const mountStatus = get(imuManagement, 'mount_calibration.status');
 
   const pad = st?.pad || {};
   const padDone = Boolean(pad.connected || pad.virtual);
@@ -248,29 +254,42 @@ function paintChecklist(ctx, st) {
   const written = mode === 'motion';
 
   const servosDone = dirty > 0;
+  const servoOnline = Number(get(st, 'servos.online'));
+  const servoCalibrationComplete = get(st, 'servos.calibration.complete') === true;
+  const servoReadLive = Boolean(session && get(st, 'servos.bus') === 'taken');
+  const servoStatusText = servoReadLive
+    ? `${session.online ?? (Number.isFinite(servoOnline) ? servoOnline : 0)}/15 颗在线`
+    : '总线尚未由 Studio 接管，当前未读取在线数量';
+  const servoTaskText = dirty > 0
+    ? `已调整 ${dirty || changed.length} 颗，草稿待提交`
+    : servoCalibrationComplete
+      ? '0 位和方向标定已完成'
+      : '待完成 0 位和方向标定';
+  const imuDeviceText = imuReady
+    ? `传感器在线${imu.model ? ` · ${imu.model}` : get(imuManagement, 'runtime.model') ? ` · ${get(imuManagement, 'runtime.model')}` : ''}`
+    : `设备状态未就绪：${imu.device_reason || imu.reason || imuManagement.error || '等待最新状态'}`;
+  const imuTaskText = imuDone
+    ? `机体对齐已应用${imu.residual_deg == null ? '' : `，残差 ${fmt.deg(imu.residual_deg)}`}`
+    : solved
+      ? '对齐已解算，等待写入'
+      : wizard.running
+        ? `正在采集第 ${imuSteps + 1}/5 步`
+        : mountStatus === 'pending_restart'
+          ? '标定配置待重启生效'
+          : imuReady
+            ? '待完成机体对齐标定'
+            : '设备恢复后再进行机体对齐标定';
   const items = [
     {
       n: 1, title: '舵机 0 位',
-      state: servosDone ? 'done' : session ? 'todo' : 'todo',
-      text: servosDone
-        ? `已调 ${dirty || changed.length || 0} 颗，还在草稿里`
-        : session
-          ? `已接管 ${session.online ?? 15} 颗，还没动 0 位`
-          : '先接管总线，再调 0 位和方向',
+      state: servoCalibrationComplete && dirty === 0 ? 'done' : 'todo',
+      text: `${servoStatusText}；${servoTaskText}`,
       go: '/servos',
     },
     {
       n: 2, title: 'IMU 方向',
-      state: imuDone ? 'done' : solved ? 'done' : wizard.running ? 'todo' : 'todo',
-      text: imuDone
-        ? `已校准，残差 ${fmt.deg(imu.residual_deg ?? get(st, 'imu.wizard.result.residual_deg'))}`
-        : solved
-          ? '已解算通过，还没写入文件'
-          : wizard.running
-            ? `采集第 ${imuSteps + 1}/5 步`
-            : imu.ok === false
-              ? '读不到 IMU，先检查接线'
-              : '五步采集：平放 + 前后左右各倾一次',
+      state: !imuReady ? 'fail' : imuDone ? 'done' : solved ? 'done' : 'todo',
+      text: `${imuDeviceText}；${imuTaskText}`,
       go: '/imu',
     },
     {
