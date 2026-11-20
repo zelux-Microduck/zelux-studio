@@ -18,6 +18,7 @@ let dragging = -1;
 const cardsById = new Map();
 const editorById = new Map();
 const draftById = new Map();
+const pendingSaves = new Set();
 let draftCounter = 0;
 
 export function page(ctx) {
@@ -118,6 +119,7 @@ export function unmount() {
   el = {};
   dragging = -1;
   editorById.clear();
+  pendingSaves.clear();
   draftById.clear();
 }
 
@@ -132,6 +134,14 @@ function paint(ctx) {
   const instances = Array.isArray(inventory.instances)
     ? inventory.instances
     : (fan.pin_config?.instances || []);
+
+  // A late authoritative snapshot may confirm a write whose reply was lost.
+  for (const [id, draft] of draftById) {
+    if (draft._outcomeUnknown && instances.some((item) => item.id === draft._pendingId)) {
+      draftById.delete(id);
+      editorById.delete(id);
+    }
+  }
 
   // Include drafts with live instances (drafts come first to show at top)
   const allInstances = [...draftById.values(), ...instances.filter((i) => !draftById.has(i.id))];
@@ -204,6 +214,7 @@ function paint(ctx) {
   if (el.resetCurveBtn) el.resetCurveBtn.disabled = disabled;
 
   const chips = [];
+  if (fan.status_stale) chips.push(chip('实时状态待刷新', 'warn'));
   chips.push(chip(mode === 'auto' ? '自动' : '手动', mode === 'auto' ? 'ok' : 'warn'));
   const unavailableCount = items.filter((item) => item.hardware_available === false || item.why).length;
   if (unavailableCount) chips.push(chip(unavailableCount + ' 个实例硬件不可用', 'danger'));
@@ -252,7 +263,7 @@ function renderInstanceEditor(instance, disabled = false) {
     Object.entries(fields).forEach(([key, f]) => {
       if (key !== 'id') f.input.disabled = disabled;
     });
-    existing.saveBtn.disabled = disabled;
+    existing.saveBtn.disabled = disabled || pendingSaves.has(instance.id) || !!instance._outcomeUnknown;
     existing.removeBtn.disabled = disabled;
     existing.original = instance;
     existing.toggleBtn.disabled = disabled || !!instance._draft;
@@ -277,7 +288,7 @@ function renderInstanceEditor(instance, disabled = false) {
   });
   toggleBtn.disabled = disabled || !!instance._draft;
   removeBtn.disabled = disabled;
-  saveBtn.disabled = disabled;
+  saveBtn.disabled = disabled || pendingSaves.has(instance.id) || !!instance._outcomeUnknown;
   // ID field already set immutable above; other fields follow network state
   Object.entries(fields).forEach(([key, f]) => {
     if (key !== 'id') f.input.disabled = disabled;
@@ -318,7 +329,14 @@ function readInstance(instance, fields) {
 }
 
 async function saveInstance(original, fields) {
+  const ctx = ctxRef;
+  const scope = el;
+  if (!ctx || pendingSaves.has(original.id)) return;
   original = editorById.get(original.id)?.original || original;
+  if (original._outcomeUnknown) {
+    toast('上次保存结果尚未确认，请刷新状态核对实例，不要重复创建。', 'warn');
+    return;
+  }
   const instance = readInstance(original, fields);
   if (!instance.id || !instance.name) {
     toast('请填写有效的实例 ID 和名称。', 'warn');
@@ -340,23 +358,52 @@ async function saveInstance(original, fields) {
     toast('每转脉冲数必须在 1–16 范围内。', 'warn');
     return;
   }
+  pendingSaves.add(original.id);
+  paint(ctx);
   try {
     const op = original._draft ? 'instance_create' : 'instance_update';
-    await ctxRef.run('fan.op', { op, instance_id: original.id, instance });
+    const response = await ctx.run('fan.op', { op, instance_id: original.id, instance });
+    if (ctxRef !== ctx || el !== scope) return;
     draftById.delete(original.id);
     editorById.delete(original.id);
-    toast('风扇实例已保存并由服务应用。', 'ok');
-  } catch (err) { toast(err.message || String(err), 'error'); }
+    applyFanResponse(ctx, response, scope);
+    const warning = response?.result?.refresh_warning;
+    toast(warning || '风扇实例已保存并由服务应用。', warning ? 'warn' : 'ok');
+  } catch (err) {
+    if (ctxRef !== ctx || el !== scope) return;
+    if (['outcome_unknown', 'timeout', 'disconnected', 'offline'].includes(err.code) || /超时|断开|timeout/i.test(err.message || '')) {
+      original._outcomeUnknown = true;
+      original._pendingId = instance.id;
+      toast('保存结果未知，请刷新状态核对实例；不要重复创建。', 'warn', 7000);
+      // Read-only reconciliation, never replay the write.
+      try { applyFanResponse(ctx, await ctx.cmd('fan.op', { op: 'status' }), scope); } catch (_) {}
+    } else toast(err.message || String(err), 'error');
+  } finally {
+    if (ctxRef === ctx && el === scope) {
+      pendingSaves.delete(original.id);
+      paint(ctx);
+    }
+  }
+}
+
+function applyFanResponse(ctx, response, scope) {
+  if (ctxRef !== ctx || el !== scope || !response?.fan) return;
+  ctx.store.set('st', { ...(ctx.state() || {}), fan: response.fan });
 }
 
 async function toggleInstance(instanceId) {
+  const ctx = ctxRef;
+  const scope = el;
   const instance = editorById.get(instanceId)?.original;
   if (!instance || instance._draft) return;
   const enabled = instance.enabled === false;
   if (!enabled && !window.confirm('禁用会立即停止该风扇，请确认设备仍有足够散热。')) return;
   try {
-    await ctxRef.run('fan.op', { op: enabled ? 'instance_enable' : 'instance_disable', instance_id: instanceId });
-    toast(enabled ? '实例已启用，自动温控已接管。' : '实例已禁用，输出已停止。', 'ok');
+    const response = await ctx.run('fan.op', { op: enabled ? 'instance_enable' : 'instance_disable', instance_id: instanceId });
+    if (ctxRef !== ctx || el !== scope) return;
+    applyFanResponse(ctx, response, scope);
+    const warning = response?.result?.refresh_warning;
+    toast(warning || (enabled ? '实例已启用，自动温控已接管。' : '实例已禁用，输出已停止。'), warning ? 'warn' : 'ok');
   } catch (err) { toast(err.message || String(err), 'error'); }
 }
 
@@ -366,6 +413,8 @@ function sameChildren(parent, desired) {
 }
 
 async function deleteInstance(instanceId) {
+  const ctx = ctxRef;
+  const scope = el;
   if (draftById.has(instanceId)) {
     draftById.delete(instanceId);
     editorById.delete(instanceId);
@@ -376,9 +425,15 @@ async function deleteInstance(instanceId) {
   const label = item?.name || instanceId;
   if (!window.confirm(`删除实例”${label}”？\n\n该实例会立即停止，风扇服务持有的 PWM/GPIO 将被释放。\n请确认设备仍有足够散热。`)) return;
   try {
-    const response = await ctxRef.run('fan.op', { op: 'instance_delete', instance_id: instanceId, confirm: true });
+    const response = await ctx.run('fan.op', { op: 'instance_delete', instance_id: instanceId, confirm: true });
+    if (ctxRef !== ctx || el !== scope) return;
     draftById.delete(instanceId);
     editorById.delete(instanceId);
+    applyFanResponse(ctx, response, scope);
+    if (response?.result?.refresh_warning) {
+      toast(response.result.refresh_warning, 'warn');
+      return;
+    }
     const released = response?.result?.released || [];
     if (released.some((entry) => entry.ok === false)) {
       toast('服务报告资源释放失败，请检查服务状态后重试。', 'error');
