@@ -20,8 +20,13 @@ const editorById = new Map();
 const draftById = new Map();
 const pendingSaves = new Set();
 let draftCounter = 0;
+// Setup is an on-demand response, not a field in the streamed device snapshot.
+let pwmSetup = null;
+let setupRequest = 0;
 
 export function page(ctx) {
+  pwmSetup = null;
+  setupRequest += 1;
   ctxRef = ctx;
   dragging = -1;
 
@@ -51,10 +56,16 @@ export function page(ctx) {
     serverNote,
     h('div.row', { style: { marginTop: '10px' } }, resetCurveBtn));
 
+  const readinessNote = h('div.hint-line', { style: { marginBottom: '10px' } }, '正在检查 PWM 引脚准备状态…');
+  const setupSelect = h('select', { 'aria-label': '待配置 PWM 物理引脚' });
+  const refreshSetupBtn = btn('刷新引脚状态', { size: 'sm', onClick: () => refreshPwmSetup(ctxRef) });
+  const configurePinBtn = btn('预览并配置 PWM 引脚', { size: 'sm', onClick: () => configurePwmPin(ctxRef) });
+  const rollbackPinBtn = btn('回滚未生效配置', { size: 'sm', onClick: () => rollbackPwmPin(ctxRef) });
+  const setupControls = h('div.row', { style: { marginBottom: '10px' } }, setupSelect, configurePinBtn, rollbackPinBtn, refreshSetupBtn);
   const instanceHost = h('div.fan-instance-list', {});
   const addBtn = btn('添加风扇实例', { kind: 'primary', onClick: addInstance });
-  const pinCard = card({ title: '风扇实例与引脚', sub: '同一型号驱动可创建多个实例；引脚由实例配置' },
-    instanceHost, h('div.row', { style: { marginTop: '10px' } }, addBtn),
+  const pinCard = card({ title: '风扇实例与引脚', sub: '选择主控物理 PWM 引脚；控制器编号由设备端解析' },
+    readinessNote, setupControls, instanceHost, h('div.row', { style: { marginTop: '10px' } }, addBtn),
     h('div.hint-line', { style: { marginTop: '8px' } },
       '删除会停止该风扇并释放服务持有的 PWM/GPIO；请先确认不会影响散热。'));
 
@@ -67,8 +78,9 @@ export function page(ctx) {
     cardsHost,
     h('div.grid-2', {}, modeCard, curveCard), pinCard);
 
-  el = { cardsHost, instanceHost, addBtn, seg, curveSvg, serverNote, selfTestBtn, resetCurveBtn,
+  el = { cardsHost, instanceHost, addBtn, readinessNote, setupSelect, configurePinBtn, rollbackPinBtn, refreshSetupBtn, seg, curveSvg, serverNote, selfTestBtn, resetCurveBtn,
     chips: pageEl.querySelector('#fan-chips') };
+  setupSelect.addEventListener('change', () => { if (ctxRef) paint(ctxRef); });
   drawCurve();
   return pageEl;
 }
@@ -110,9 +122,85 @@ export function mount(ctx) {
   bindCurveDrag(ctx);
   unsub = ctx.store.subscribe(() => paint(ctx));
   paint(ctx);
+  refreshPwmSetup(ctx);
+}
+
+async function refreshPwmSetup(ctx) {
+  if (!ctx) return;
+  const request = ++setupRequest;
+  try {
+    const result = await ctx.cmd('fan.op', { op: 'pwm_setup_status' });
+    if (ctxRef !== ctx || request !== setupRequest) return;
+    const status = result.pwm_setup || result;
+    if (!status || !Array.isArray(status.mapped_pins) || !status.state) {
+      throw new Error('设备返回的 PWM 引脚状态格式不完整');
+    }
+    pwmSetup = status;
+    paint(ctx);
+  } catch (err) {
+    if (ctxRef === ctx && request === setupRequest) {
+      pwmSetup = { state: 'unavailable', mapped_pins: [],
+        reason: '读取 PWM 引脚状态失败：' + (err.message || err) };
+      paint(ctx);
+      toast(pwmSetup.reason, 'error');
+    }
+  }
+}
+
+function pinStatus(ctx) {
+  return pwmSetup || ctx?.state()?.fan_pins || ctx?.state()?.fan?.pwm_readiness || {};
+}
+
+async function configurePwmPin(ctx) {
+  const pinId = el.setupSelect?.value;
+  if (!ctx || !pinId) { toast('请先选择一个主控物理 PWM 引脚。', 'warn'); return; }
+  const selectedPin = (pinStatus(ctx).mapped_pins || []).find((pin) => pin.id === pinId);
+  if (selectedPin?.state === 'reboot_required') {
+    toast('该引脚配置已写入启动项，请先重启设备，再刷新引脚状态。', 'warn', 7000);
+    return;
+  }
+  if (selectedPin && !['overlay_required', 'runtime_available'].includes(selectedPin.state)) {
+    toast(selectedPin.reason || '当前板卡或系统档案不支持自动配置此引脚。', 'warn', 7000);
+    return;
+  }
+  try {
+    const previewResult = await ctx.cmd('fan.op', { op: 'pwm_setup_preview', pin_id: pinId });
+    const preview = previewResult.preview || {};
+    if (preview.state === 'runtime_available') {
+      toast(preview.reason || '该引脚已经就绪。', 'ok');
+      await refreshPwmSetup(ctx);
+      return;
+    }
+    const details = (preview.diff || '未检测到启动配置差异。') + '\n\n配置会先备份，再启用已校验的设备树 overlay。设备必须重启后才能验证。是否应用？';
+    if (!window.confirm(details)) return;
+    await ctx.run('fan.op', { op: 'pwm_setup_apply', pin_id: pinId, token: preview.token, confirm: true });
+    await refreshPwmSetup(ctx);
+    toast('PWM overlay 配置已保存。请重启设备；重启后刷新引脚状态，通过验证后即可创建实例。', 'warn', 8000);
+  } catch (err) {
+    toast('PWM 引脚配置失败：' + (err.message || err), 'error', 7000);
+  }
+}
+
+async function rollbackPwmPin(ctx) {
+  const pinId = el.setupSelect?.value;
+  const selectedPin = (pinStatus(ctx).mapped_pins || []).find((pin) => pin.id === pinId);
+  if (!ctx || !['reboot_required', 'validation_failed'].includes(selectedPin?.state)) {
+    toast('只有待重启或重启验证失败的配置可以从这里回滚；运行中的引脚不会在线关闭。', 'warn');
+    return;
+  }
+  if (!window.confirm('回滚 ' + selectedPin.label + ' 尚未生效的 PWM overlay 启动配置？\n\n回滚会保留其他启动项，并需要重启；该引脚将不能用于风扇实例。')) return;
+  try {
+    await ctx.run('fan.op', { op: 'pwm_setup_rollback', pin_id: pinId, confirm: true });
+    await refreshPwmSetup(ctx);
+    toast('PWM overlay 已从启动配置中移除，请重启设备完成回滚。', 'warn', 8000);
+  } catch (err) {
+    toast('PWM overlay 回滚失败：' + (err.message || err), 'error', 7000);
+  }
 }
 
 export function unmount() {
+  pwmSetup = null;
+  setupRequest += 1;
   if (unsub) unsub();
   unsub = null;
   ctxRef = null;
@@ -143,10 +231,58 @@ function paint(ctx) {
     }
   }
 
+  const readiness = pinStatus(ctx);
+  for (const [id, editor] of editorById) {
+    const pinFieldPart = editor.fields.pwm_pin;
+    if (!pinFieldPart) continue;
+    const selected = pinFieldPart.input.value;
+    const rebuilt = pinField(editor.original, editor.original.pwm || {});
+    if (selected) rebuilt.input.value = selected;
+    syncPinOptions(pinFieldPart.input, [...rebuilt.input.children]);
+    pinFieldPart.selected = rebuilt.selected;
+  }
+  if (el.readinessNote) {
+    const mappedPins = readiness.mapped_pins || [];
+    const selectedPin = mappedPins.find((pin) => pin.id === el.setupSelect?.value);
+    if (el.setupSelect) {
+      const options = [h('option', { value: '' }, '选择主控 PWM 引脚…')];
+      for (const pin of mappedPins) {
+        const stateLabel = pin.ready ? '已就绪' : pin.state === 'reboot_required' ? '待重启'
+          : pin.state === 'rollback_reboot_required' ? '回滚待重启'
+            : ['validation_failed', 'rollback_failed'].includes(pin.state) ? '验证失败' : '待配置';
+        options.push(h('option', { value: pin.id }, pin.label + ' · ' + stateLabel));
+      }
+      syncPinOptions(el.setupSelect, options);
+    }
+    const state = selectedPin?.state || readiness.state;
+    el.readinessNote.textContent = state === 'runtime_available'
+      ? (selectedPin ? selectedPin.label + ' 已就绪；' : '物理引脚与 PWM 控制器已就绪；') + '实例启用时由风扇服务按需导出 PWM 通道。'
+      : state === 'overlay_required'
+        ? (selectedPin?.reason || readiness.reason || '需要先启用 PWM 设备树配置') + '；可预览并确认写入受信 overlay 配置，之后需要重启设备。'
+        : state === 'reboot_required'
+          ? (selectedPin?.reason || 'PWM 配置已保存，需重启设备。') + '重启后返回本页点击“刷新引脚状态”验证，再创建风扇实例。'
+          : state === 'rollback_reboot_required'
+            ? '回滚配置已保存，请重启设备；返回后刷新状态，确认 overlay 已卸载。'
+            : ['validation_failed', 'rollback_failed'].includes(state)
+              ? (selectedPin?.reason || '设备已经重启，但 PWM 引脚未通过验证；检查启动日志，或回滚 overlay。')
+              : selectedPin?.reason || readiness.reason || 'PWM 准备状态未知；请检查设备端风扇服务。';
+  }
+
   // Include drafts with live instances (drafts come first to show at top)
   const allInstances = [...draftById.values(), ...instances.filter((i) => !draftById.has(i.id))];
   const itemById = new Map(items.map((item) => [item.id, item]));
   const disabled = !available || !ctx.link.online;
+  const pinReady = readiness.state === 'runtime_available' && (readiness.mapped_pins || []).some((pin) => pin.ready);
+  if (el.addBtn) el.addBtn.disabled = disabled || !pinReady;
+  if (el.configurePinBtn) {
+    const selected = (readiness.mapped_pins || []).find((pin) => pin.id === el.setupSelect?.value);
+    el.configurePinBtn.disabled = disabled || !selected || !['overlay_required', 'runtime_available'].includes(selected.state);
+  }
+  if (el.rollbackPinBtn) {
+    const selected = (readiness.mapped_pins || []).find((pin) => pin.id === el.setupSelect?.value);
+    el.rollbackPinBtn.disabled = disabled || !['reboot_required', 'validation_failed'].includes(selected?.state);
+  }
+  if (el.refreshSetupBtn) el.refreshSetupBtn.disabled = disabled;
 
   const cards = allInstances.map((instance) => {
     let parts = cardsById.get(instance.id);
@@ -199,11 +335,7 @@ function paint(ctx) {
     if (!instanceIds.has(id)) editorById.delete(id);
   }
 
-  if (instances.length === 0 && !available) {
-    el.addBtn.disabled = true;
-  } else {
-    el.addBtn.disabled = disabled;
-  }
+  el.addBtn.disabled = disabled || !pinReady;
 
   el.seg.querySelectorAll('button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
@@ -246,9 +378,41 @@ function paint(ctx) {
   drawCurve(fan.temp);
 }
 
+// Replacing native select options on every telemetry tick closes the open menu.
+// Compare visible option content, not snapshot identity (each poll is a new object).
+function syncPinOptions(select, options) {
+  const current = [...select.children];
+  if (current.length === options.length && current.every((option, i) =>
+    option.value === options[i].value && option.textContent === options[i].textContent)) return;
+  const selected = select.value;
+  select.replaceChildren(...options);
+  select.value = options.some((option) => option.value === selected) ? selected : '';
+}
+
 function field(label, value, type = 'text', attrs = {}) {
   const input = h('input', { type, value: value ?? '', ...attrs });
   return { input, el: h('label.fan-field', {}, h('span', label), input) };
+}
+
+function pinField(instance, pwm) {
+  const readiness = pinStatus(ctxRef);
+  const pins = readiness.mapped_pins || [
+    { id: 'radxa-zero3w-pin21-pwm12-m1', label: 'pin 21 · PWM12_M1', pin: 21, function: 'PWM12_M1', gpio: 149, chip: null, channel: 0, ready: false },
+    { id: 'radxa-zero3w-pin24-pwm13-m1', label: 'pin 24 · PWM13_M1', pin: 24, function: 'PWM13_M1', gpio: 150, chip: null, channel: 0, ready: false },
+  ];
+  const current = instance.pwm_pin || '';
+  const select = h('select', { value: current, 'aria-label': 'PWM 物理引脚' });
+  select.append(h('option', { value: '' }, '选择 PWM 引脚…'));
+  for (const pin of pins) select.append(h('option', { value: pin.id }, pin.label));
+  const resolved = pins.find((pin) => pin.id === current)
+    || (pwm && pins.find((pin) => pin.chip === Number(pwm.chip) && pin.channel === Number(pwm.channel)));
+  if (resolved) select.value = resolved.id;
+  return { input: select, el: h('label.fan-field', {}, h('span', '主控 PWM 引脚'), select),
+    selected: () => {
+      const pin = pins.find((entry) => entry.id === select.value);
+      return pin && pin.ready && Number.isFinite(pin.chip)
+        ? { chip: pin.chip, channel: pin.channel, pin_id: pin.id } : null;
+    } };
 }
 
 function renderInstanceEditor(instance, disabled = false) {
@@ -275,8 +439,7 @@ function renderInstanceEditor(instance, disabled = false) {
   const fields = {
     id: field('实例 ID', instance.id, 'text', { maxlength: '64', disabled: !instance._draft }),
     name: field('显示名称', instance.name, 'text', { maxlength: '64' }),
-    chip: field('PWM 芯片号', pwm.chip ?? '', 'number', { min: '0', max: '255' }),
-    channel: field('PWM 通道号', pwm.channel ?? '', 'number', { min: '0', max: '255' }),
+    pwm_pin: pinField(instance, pwm),
     tach_gpio: field('测速 GPIO（可选）', instance.tach_gpio ?? '', 'number', { min: '0', max: '65535' }),
     period_ns: field('周期 ns', instance.period_ns || 40000, 'number', { min: '1000', max: '10000000' }),
     pulses_per_rev: field('每转脉冲数', instance.pulses_per_rev || 2, 'number', { min: '1', max: '16' }),
@@ -321,7 +484,8 @@ function readInstance(instance, fields) {
     name: value('name'),
     driver_id: instance.driver_id || 'zelux.fan.radxa-pwm',
     enabled: instance.enabled !== false,
-    pwm: { chip: requiredNumber('chip'), channel: requiredNumber('channel') },
+    pwm: fields.pwm_pin.selected(),
+    pwm_pin: fields.pwm_pin.input.value,
     period_ns: Number.isFinite(period) ? period : NaN,
     tach_gpio: optionalNumber('tach_gpio'),
     pulses_per_rev: Number.isFinite(pulses) ? pulses : NaN,
@@ -342,8 +506,8 @@ async function saveInstance(original, fields) {
     toast('请填写有效的实例 ID 和名称。', 'warn');
     return;
   }
-  if (!Number.isFinite(instance.pwm.chip) || !Number.isFinite(instance.pwm.channel)) {
-    toast('请填写有效的 PWM 芯片和通道号。', 'warn');
+  if (!instance.pwm || !Number.isFinite(instance.pwm.chip) || !Number.isFinite(instance.pwm.channel)) {
+    toast('请选择此设备档案支持的 PWM 物理引脚。', 'warn');
     return;
   }
   if (!Number.isFinite(instance.period_ns) || instance.period_ns < 1000 || instance.period_ns > 10000000) {
@@ -455,7 +619,7 @@ async function deleteInstance(instanceId) {
 function addInstance() {
   const id = `fan-${Date.now().toString(36)}-${(++draftCounter).toString(36)}`;
   const draft = { id, name: '新风扇', driver_id: 'zelux.fan.radxa-pwm', enabled: true,
-    pwm: { chip: '', channel: '' }, period_ns: 40000,
+    pwm: { chip: '', channel: '' }, pwm_pin: '', period_ns: 40000,
     tach_gpio: null, pulses_per_rev: 2, _draft: true };
   draftById.set(id, draft);
   paint(ctxRef);

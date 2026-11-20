@@ -6,6 +6,7 @@ class Element {
     this.dataset = {}; this.attributes = {}; this.value = ''; this.className = '';
     this.parentNode = null; this.disabled = false;
   }
+  get firstChild() { return this.children[0] || null; }
   append(...nodes) { for (const node of nodes) { node.parentNode = this; this.children.push(node); } }
   set value(val) { this._value = String(val); }
   get value() { return this._value; }
@@ -33,12 +34,15 @@ const calls = [];
 let notify;
 const instance = { id: 'main', name: 'Main', driver_id: 'zelux.fan.radxa-pwm', enabled: true,
   pwm: { chip: 0, channel: 0 }, period_ns: 40000 };
-let state = { fan: { available: true, mode: 'auto', inventory: { instances: [instance] },
+const pinReady = { profile: 'radxa-zero3w-rk3566-pwm.v1', state: 'runtime_available', mapped_pins: [
+  { id: 'radxa-zero3w-pin24-pwm13-m1', label: 'pin 24 · PWM13_M1', pin: 24, function: 'PWM13_M1', gpio: 150, chip: 0, channel: 0, ready: true, registered: true },
+] };
+let state = { fan_pins: pinReady, fan: { available: true, mode: 'auto', inventory: { instances: [instance] },
   items: [{ id: 'main', pct: 60, control_mode: 'auto' }] } };
 const ctx = { link: { online: true }, state: () => state,
   store: { subscribe(fn) { notify = fn; return () => {}; } },
   run: async (name, args) => { calls.push([name, args]); return { result: { released: [] } }; },
-  cmd: async (name, args) => { calls.push([name, args]); return {}; } };
+  cmd: async (name, args) => { calls.push([name, args]); return args.op === 'pwm_setup_status' ? { pwm_setup: pinReady } : {}; } };
 const root = fanPage.page(ctx);
 fanPage.mount(ctx);
 const firstRange = root.querySelectorAll('input').find(n => n.attributes.type === 'range');
@@ -50,7 +54,7 @@ const button = text => all(root).find(n => n.tagName === 'button' && n.textConte
 await button('禁用实例').events.click();
 assert.equal(calls.at(-1)[1].op, 'instance_disable');
 assert.equal(calls.at(-1)[1].instance_id, 'main');
-state = { fan: { ...state.fan, inventory: { instances: [{ ...instance, enabled: false }] }, items: [] } };
+state = { ...state, fan: { ...state.fan, inventory: { instances: [{ ...instance, enabled: false }] }, items: [] } };
 notify();
 assert.equal(root.querySelectorAll('input').find(n => n.attributes.type === 'range').disabled, true);
 assert.equal(root.querySelectorAll('input').find(n => n.attributes.type === 'range'), firstRange,
@@ -78,15 +82,71 @@ console.log('PASS: fan DOM enable/disable, immutable identity, stale editor stat
 // Creation must replace the draft immediately, without waiting for polling.
 ctx.link.online = true;
 ctx.store.set = (key, value) => { assert.equal(key, 'st'); state = value; notify?.(); };
-state = { otherModule: { keep: true }, fan: { available: true, inventory: { instances: [] }, items: [] } };
-let view = fanPage.page(ctx);
+let view;
+// Overlay onboarding previews the exact change and requires a second confirmed write.
+const overlayPending = { ...pinReady, state: 'overlay_required', mapped_pins: [
+  { ...pinReady.mapped_pins[0], ready: false, state: 'overlay_required' },
+] };
+state = { fan_pins: overlayPending, fan: { available: true, inventory: { instances: [] }, items: [] } };
+ctx.cmd = async (_name, args) => { calls.push([_name, args]); return { pwm_setup: overlayPending }; };
+view = fanPage.page(ctx); fanPage.mount(ctx);
+await Promise.resolve();
+state = { fan_pins: overlayPending, fan: { available: true, inventory: { instances: [] }, items: [] } };
+const setupSelect = view.querySelectorAll('select')[0];
+notify();
+const setupOptions = [...setupSelect.children];
+for (let i = 0; i < 20; i++) {
+  // Production WebSocket replaces the entire snapshot without fan_pins.
+  state = { fan: { ...state.fan, temp: 40 + i } };
+  notify();
+  assert.deepEqual([...setupSelect.children], setupOptions,
+    'telemetry must not rebuild native PWM options while the menu is open');
+}
+assert.equal(setupOptions[1].value, 'radxa-zero3w-pin24-pwm13-m1');
+assert.ok(all(view).some(n => n.textContent.includes('可预览并确认写入受信 overlay')),
+  'setup response must survive full telemetry snapshot replacement');
+await button('刷新引脚状态').events.click();
+state = { fan: { ...state.fan, temp: 45 } };
+notify();
+assert.equal(setupSelect.children[1], setupOptions[1], 'manual refresh and next telemetry must not empty pins');
+const pendingSetupReplies = [];
+ctx.cmd = () => new Promise(resolve => pendingSetupReplies.push(resolve));
+const oldRefresh = button('刷新引脚状态').events.click();
+const newRefresh = button('刷新引脚状态').events.click();
+pendingSetupReplies[1]({ pwm_setup: overlayPending });
+await newRefresh;
+pendingSetupReplies[0]({ pwm_setup: { state: 'unavailable', mapped_pins: [] } });
+await oldRefresh;
+assert.equal(setupSelect.children[1], setupOptions[1], 'late old refresh must not erase newer setup state');
+setupSelect.value = 'radxa-zero3w-pin24-pwm13-m1';
+setupSelect.events.change();
+notify();
+assert.equal(setupSelect.value, 'radxa-zero3w-pin24-pwm13-m1', 'polling must preserve selection');
+assert.equal(setupSelect.children[1], setupOptions[1], 'selection must not rebuild options');
+assert.equal(all(view).find(n => n.tagName === 'button' && n.textContent === '预览并配置 PWM 引脚').disabled, false);
+ctx.cmd = async (_name, args) => {
+  calls.push([_name, args]);
+  if (args.op === 'pwm_setup_preview') return { preview: { state: 'preview', token: 'one-use-token', diff: 'user_overlays=...'} };
+  return { pwm_setup: overlayPending };
+};
+ctx.run = async (name, args) => { calls.push([name, args]); return { ok: true }; };
+await button('预览并配置 PWM 引脚').events.click();
+assert.ok(calls.some(([, args]) => args.op === 'pwm_setup_preview'));
+assert.ok(calls.some(([, args]) => args.op === 'pwm_setup_apply' && args.confirm === true && args.token === 'one-use-token'));
+fanPage.unmount();
+
+ctx.cmd = async (_name, args) => { calls.push([_name, args]); return { pwm_setup: pinReady }; };
+state = { otherModule: { keep: true }, fan_pins: pinReady, fan: { available: true, inventory: { instances: [] }, items: [] } };
+view = fanPage.page(ctx);
 fanPage.mount(ctx);
 const findButton = (view, text) => all(view).find(n => n.tagName === 'button' && n.textContent === text);
 function newDraft(view) {
   findButton(view, '添加风扇实例').events.click();
   const save = findButton(view, '保存实例');
-  const inputs = save.parentNode.parentNode.querySelectorAll('input');
-  inputs[2].value = '0'; inputs[3].value = '0';
+  const row = save.parentNode.parentNode;
+  const inputs = row.querySelectorAll('input');
+  const selects = row.querySelectorAll('select');
+  selects[0].value = 'radxa-zero3w-pin24-pwm13-m1';
   return { save, id: inputs[0].value };
 }
 let draft = newDraft(view);
@@ -107,7 +167,7 @@ assert.equal(state.otherModule.keep, true, 'merging command result preserves oth
 fanPage.unmount();
 
 // A sent write with no confirmation only triggers a read, not another create.
-state = { fan: { available: true, inventory: { instances: [] }, items: [] } };
+state = { fan_pins: pinReady, fan: { available: true, inventory: { instances: [] }, items: [] } };
 view = fanPage.page(ctx); fanPage.mount(ctx); draft = newDraft(view);
 ctx.run = async (name, args) => { calls.push([name, args]); throw Object.assign(new Error('unknown'), { code: 'outcome_unknown' }); };
 ctx.cmd = async (name, args) => { calls.push([name, args]); return { fan: state.fan }; };
@@ -116,19 +176,19 @@ assert.equal(calls.at(-1)[1].op, 'status');
 const afterUnknown = calls.length;
 await draft.save.events.click();
 assert.equal(calls.length, afterUnknown, 'unknown write must not invite a duplicate create');
-state = { fan: { available: true, inventory: { instances: [{ ...instance, id: draft.id }] }, items: [] } };
+state = { fan_pins: pinReady, fan: { available: true, inventory: { instances: [{ ...instance, id: draft.id }] }, items: [] } };
 notify();
 assert.equal(findButton(view, '保存实例').parentNode.parentNode.querySelectorAll('input')[0].disabled, true,
   'late authoritative state confirms and removes the unknown draft');
 fanPage.unmount();
 
 // A delayed reply must not write to a newly mounted page, even with the same ctx.
-state = { fan: { available: true, inventory: { instances: [] }, items: [] } };
+state = { fan_pins: pinReady, fan: { available: true, inventory: { instances: [] }, items: [] } };
 view = fanPage.page(ctx); fanPage.mount(ctx); draft = newDraft(view);
 ctx.run = () => new Promise(resolve => { release = resolve; });
 pending = draft.save.events.click();
 fanPage.unmount();
-state = { marker: 'new-page', fan: { available: true, inventory: { instances: [] }, items: [] } };
+state = { marker: 'new-page', fan_pins: pinReady, fan: { available: true, inventory: { instances: [] }, items: [] } };
 view = fanPage.page(ctx); fanPage.mount(ctx);
 release({ fan: { inventory: { instances: [persisted] } } });
 await pending;
