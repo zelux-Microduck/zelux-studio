@@ -150,25 +150,7 @@ function paint(ctx) {
   const items = get(st, 'servos.items', []) || [];
   const draft = get(st, 'servos.draft', {}) || {};
 
-  // 接管条
-  if (sess) {
-    el.takeover.className = 'takeover is-on';
-    el.takeover.replaceChildren(
-      icon('check', 15),
-      h('span.grow', {},
-        `已接管总线 · ${sess.online ?? '—'}/15 在线 · ${sess.holding ?? '—'} 颗保持`,
-        h('span.mono', { style: { marginLeft: '8px' } }, sess.took_ms != null ? `${sess.took_ms} ms` : ''),
-        draft.dirty ? h('span.mono', { style: { marginLeft: '8px' } }, `草稿 ${draft.dirty} 处改动待写入`) : null),
-      btn('交还主程序', { size: 'sm', onClick: () => release(ctx) }));
-  } else {
-    el.takeover.className = 'takeover';
-    el.takeover.replaceChildren(
-      icon('alert', 15),
-      h('span.grow', {}, online
-        ? '只读：还没接管总线，改不了任何东西。接管后主程序会停，手柄失效。'
-        : '连接断了：接管要先连上设备。'),
-      btn('开始调舵机', { kind: 'primary', size: 'sm', disabled: !online, onClick: () => take(ctx) }));
-  }
+  paintTakeover(ctx, sess, online, draft);
 
   // 姿态
   duck?.setState(st);
@@ -185,9 +167,33 @@ function paint(ctx) {
   el.poseSelect.disabled = !sess;
 }
 
+function paintTakeover(ctx, sess, online, draft) {
+  const active = !!sess;
+  // Telemetry must not replace the hovered/focused action button.
+  if (!el.takeoverAction || el.takeoverActive !== active) {
+    el.takeoverActive = active;
+    el.takeoverText = h('span.grow');
+    el.takeoverAction = active
+      ? btn('交还主程序', { size: 'sm', onClick: () => release(ctx) })
+      : btn('开始调舵机', { kind: 'primary', size: 'sm', onClick: () => take(ctx) });
+    el.takeover.className = active ? 'takeover is-on' : 'takeover';
+    el.takeover.replaceChildren(icon(active ? 'check' : 'alert', 15), el.takeoverText, el.takeoverAction);
+  }
+  const text = active
+    ? `已接管总线 · ${sess.online ?? '—'}/15 在线 · ${sess.holding ?? '—'} 颗保持`
+      + (sess.took_ms != null ? ` · ${sess.took_ms} ms` : '')
+      + (draft.dirty ? ` · 草稿 ${draft.dirty} 处改动待写入` : '')
+    : online
+      ? '只读：还没接管总线，改不了任何东西。维护期间普通运动指令被拒绝，robotd 继续独占总线。'
+      : '连接断了：接管要先连上设备。';
+  if (el.takeoverText.textContent !== text) el.takeoverText.textContent = text;
+  el.takeoverAction.disabled = !online;
+}
+
 async function take(ctx) {
+  if (!window.confirm("开始舵机维护前，请固定支撑机体，确保腿部与舵机转动区域无人接触。\n进入不会自动归位或改变扭矩；后续调节可能引起关节运动。\n确认已固定支撑并开始维护？")) return;
   try {
-    const res = await ctx.run('servo.bus', { op: 'take' }, { timeout: 15000 });
+    const res = await ctx.run('servo.bus', { op: 'take', supported: true }, { timeout: 15000 });
     toast(`已接管：${res?.online ?? '—'}/15 在线${res?.missing?.length ? `，缺 ${res.missing.join('、')}` : ''}`, 'ok', 4200);
   } catch { /* 已提示 */ }
 }

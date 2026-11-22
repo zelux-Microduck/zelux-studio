@@ -8,6 +8,7 @@ import { link } from '../link.js';
 let duck = null;
 let el = {};
 let unsub = null;
+let checklistNodes = null;
 
 const POSTURE_COPY = {
   absent: { say: '还没连上主控', hint: '检查电源和总线，再刷新这一页', next: null },
@@ -116,6 +117,7 @@ export function unmount() {
   duck?.destroy();
   duck = null;
   el = {};
+  checklistNodes = null;
 }
 
 function onResize() {
@@ -310,14 +312,26 @@ function paintChecklist(ctx, st) {
     },
   ];
 
-  el.checkGrid.replaceChildren(...items.map((it) => h('button', {
-    class: 'check-item',
-    type: 'button',
-    dataset: { state: it.state },
-    onclick: () => ctx.go(it.go),
-  },
-  h('div.top', {}, h('span.idx', it.state === 'done' ? '✓' : String(it.n)), h('span.ct', it.title)),
-  h('span.cs', it.text))));
+  if (!checklistNodes) {
+    checklistNodes = items.map((it) => {
+      const index = h('span.idx');
+      const title = h('span.ct', it.title);
+      const text = h('span.cs');
+      const node = h('button', {
+        class: 'check-item', type: 'button',
+        onclick: () => ctx.go(it.go),
+      }, h('div.top', {}, index, title), text);
+      return { node, index, text };
+    });
+    el.checkGrid.replaceChildren(...checklistNodes.map((parts) => parts.node));
+  }
+  items.forEach((it, i) => {
+    const parts = checklistNodes[i];
+    parts.node.dataset.state = it.state;
+    const index = it.state === 'done' ? '✓' : String(it.n);
+    if (parts.index.textContent !== index) parts.index.textContent = index;
+    if (parts.text.textContent !== it.text) parts.text.textContent = it.text;
+  });
 
   const ready = servosDone && (imuDone || solved) && padDone && !written;
   el.commitBar.hidden = !ready;

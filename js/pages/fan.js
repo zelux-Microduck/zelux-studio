@@ -294,7 +294,7 @@ function paint(ctx) {
     parts.tachHint.textContent = instance.tach_gpio == null ? '未配置测速输入' : `测速 GPIO${instance.tach_gpio}`;
     const item = itemById.get(instance.id) || {};
     const p = item.why ? DASH : (item.pct ?? DASH);
-    parts.pct.replaceChildren(h('span.live-num', p === DASH ? DASH : fmt.int(p)), h('span.unit', '%'));
+    parts.pct.textContent = p === DASH ? DASH : fmt.int(p);
     parts.rpm.textContent = item.rpm == null ? '转速 —（无测速数据）' : `${fmt.int(item.rpm)} RPM`;
     parts.temp.textContent = `温度 ${fan.temp == null ? DASH : fmt.deg(fan.temp)}`;
     parts.pin.textContent = item.path || (instance.pwm

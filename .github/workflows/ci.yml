@@ -12,6 +12,7 @@ jobs:
       - run: find js -name '*.js' -print0 | xargs -0 -n1 node --check
       - run: node --experimental-default-type=module tools/test-imu-management.mjs
       - run: node --experimental-default-type=module tools/test-imu-management-dom.mjs
+      - run: node tools/test-servo-maintenance-entry.mjs
       - run: python tools/package.py
       - uses: actions/upload-artifact@v4
         with: {name: studio-package, path: dist/}
