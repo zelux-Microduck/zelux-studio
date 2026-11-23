@@ -415,6 +415,14 @@ function pinField(instance, pwm) {
     } };
 }
 
+function directionField(instance) {
+  const input = h('select', { 'aria-label': 'PWM 调速方向' });
+  input.append(h('option', { value: 'false' }, '正向：占空比越大转速越高'));
+  input.append(h('option', { value: 'true' }, '反向：占空比越小转速越高'));
+  input.value = instance.active_low === true ? 'true' : 'false';
+  return { input, el: h('label.fan-field', {}, h('span', 'PWM 调速方向'), input) };
+}
+
 function renderInstanceEditor(instance, disabled = false) {
   const existing = editorById.get(instance.id);
   if (existing) {
@@ -440,6 +448,7 @@ function renderInstanceEditor(instance, disabled = false) {
     id: field('实例 ID', instance.id, 'text', { maxlength: '64', disabled: !instance._draft }),
     name: field('显示名称', instance.name, 'text', { maxlength: '64' }),
     pwm_pin: pinField(instance, pwm),
+    active_low: directionField(instance),
     tach_gpio: field('测速 GPIO（可选）', instance.tach_gpio ?? '', 'number', { min: '0', max: '65535' }),
     period_ns: field('周期 ns', instance.period_ns || 40000, 'number', { min: '1000', max: '10000000' }),
     pulses_per_rev: field('每转脉冲数', instance.pulses_per_rev || 2, 'number', { min: '1', max: '16' }),
@@ -486,6 +495,7 @@ function readInstance(instance, fields) {
     enabled: instance.enabled !== false,
     pwm: fields.pwm_pin.selected(),
     pwm_pin: fields.pwm_pin.input.value,
+    active_low: value('active_low') === 'true',
     period_ns: Number.isFinite(period) ? period : NaN,
     tach_gpio: optionalNumber('tach_gpio'),
     pulses_per_rev: Number.isFinite(pulses) ? pulses : NaN,
