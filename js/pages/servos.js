@@ -1,4 +1,4 @@
-/* 舵机页：接管会话 + 15 颗分组表 + 0 位微调 + 官方姿势 + 寄存器编辑。
+/* 舵机页：接管会话 + 15 颗分组表 + 零位微调 + 官方姿势 + 寄存器编辑。
    危险寄存器（5/6/8/9/11/18/19/33）先标红，写入前再确认一次。 */
 
 import {
@@ -12,17 +12,18 @@ const GROUPS = [
   { name: '头颈', ids: [30, 31, 32, 33, 34] },
 ];
 const NAME_CN = {
-  10: '右髋偏转', 11: '右髋侧摆', 12: '右髋俯仰', 13: '右膝', 14: '右踝',
-  20: '左髋偏转', 21: '左髋侧摆', 22: '左髋俯仰', 23: '左膝', 24: '左踝',
-  30: '脖子左右', 31: '脖子俯仰', 32: '头左右', 33: '头俯仰', 34: '喙',
+  10: '右髋偏航', 11: '右髋横滚', 12: '右髋俯仰', 13: '右膝', 14: '右踝',
+  20: '左髋偏航', 21: '左髋横滚', 22: '左髋俯仰', 23: '左膝', 24: '左踝',
+  30: '颈部俯仰', 31: '头部俯仰', 32: '头部偏航', 33: '头部横滚', 34: '嘴巴',
 };
 
 const REGS = [
   [5, 'ID'], [6, '波特率'], [8, '应答级别'], [9, '最小限位'], [11, '最大限位'],
-  [16, '最大扭矩'], [18, '方向（相位）'], [19, '卸载保护'], [21, '位置 P'],
-  [22, '位置 D'], [23, '位置 I'], [24, '力矩 P'], [26, '力矩 I'],
-  [31, '0 位偏移'], [33, '运行模式'], [40, '扭矩开关'], [41, '目标位置'],
-  [42, '加速度'], [44, '目标速度'],
+  [16, '最大扭矩'], [18, '相位'], [19, '卸载条件'], [21, '位置环 P'],
+  [22, '位置环 D'], [23, '位置环 I'], [24, '最小启动扭矩'],
+  [26, '正向不灵敏区'], [27, '负向不灵敏区'],
+  [31, '零位偏移'], [33, '运行模式'], [40, '扭矩开关'], [41, '加速度'],
+  [42, '目标位置'], [46, '运行速度'], [48, '转矩限制'], [50, '运行位置 P'], [51, '运行位置 D'],
 ];
 
 const DANGER = {
@@ -37,11 +38,11 @@ const DANGER = {
 };
 
 const POSE_OPTIONS = [
-  { value: '', label: '官方姿势…' },
+  { value: '', label: '选择官方姿势…' },
   { value: 'zero', label: '零位（全部 2048）' },
-  { value: 'stand', label: '站姿 stand' },
-  { value: 'sit', label: '坐姿 sit' },
-  { value: 'fold', label: '折叠 fold' },
+  { value: 'stand', label: '站立姿势' },
+  { value: 'sit', label: '坐下姿势' },
+  { value: 'fold', label: '折叠姿势' },
 ];
 
 let duck = null;
@@ -51,6 +52,10 @@ let expanded = null;
 let readCache = new Map();
 let el = {};
 let lastItemsKey = '';
+const sliderLastSent = new Map();
+const sliderQueue = new Map();
+let sliderGeneration = 0;
+const sliderDragging = new Set();
 
 export function page(ctx) {
   pageCtx = ctx;
@@ -70,11 +75,13 @@ export function page(ctx) {
     }).catch(() => {});
   }, { label: '官方姿势' });
 
+  const centerAllBtn = btn('一键中位', { kind: 'primary', onClick: () => centerServos(ctx, GROUPS.flatMap((g) => g.ids)) });
+  const centerUndoBtn = btn('撤销中位', { icon: 'refresh', onClick: () => undoCenter(ctx) });
   const actCard = card({ title: '标定动作', sub: '都需要先接管总线' },
     h('div.stack-8', {},
       h('div.row.wrap', {}, poseSelect,
-        btn('一键中位', { onClick: () => pose('zero') }),
-        btn('撤销上一步', { icon: 'refresh', onClick: () => ctx.run('servo.undo', {}).then(() => toast('已撤销', 'ok')).catch(() => {}) })),
+        centerAllBtn, centerUndoBtn,
+        btn('撤销微调', { icon: 'refresh', onClick: () => ctx.run('servo.undo', {}).then(() => toast('已撤销微调', 'ok')).catch(() => {}) })),
       h('div.divider'),
       h('div.row.wrap', {},
         btn('全部保持', { onClick: () => torque(true) }),
@@ -82,7 +89,7 @@ export function page(ctx) {
       h('div.hint-line', {}, '「松开」会卸力，鸭子会软下来——扶一下。急停请按顶栏红键。')));
 
   const board = h('div.srv-board');
-  const scroll = h('div', { style: { overflowX: 'auto' } }, board);
+  const scroll = h('div.srv-scroll', {}, board);
 
   const takeover = h('div.takeover');
   const header = h('div.row-between', {},
@@ -100,13 +107,13 @@ export function page(ctx) {
           h('div.srv-visual', {}, h('div.panel-stage.on-stage', { style: { padding: '8px' } }, canvas),
             h('div.row-between', { style: { marginTop: '8px' } }, viewSeg,
               h('span.hint-line', {}, '点关节高亮')),
-            h('div.srv-hint', {}, '使用 MicroDuck CAD 网格实时渲染。点模型中的舵机可定位对应行；舵机刻度按 2048 中位换算为弧度，仅供姿态预览，偏移与方向需上机校准。'))),
+            h('div.srv-hint', {}, '使用 MicroDuck CAD 模型实时显示 15 个关节。点模型可定位对应舵机；优先使用主控实时姿态；维护反馈按 robotd 提供的逐关节方向换算，方向缺失会明确标为示意。'))),
         actCard),
-      card({ title: '舵机表', sub: '位置/负载/电压/温度来自总线缓存' }, scroll,
+      card({ title: '舵机控制', sub: '每行功能依次为：拖动目标、当前位置、温度、保持开关、单颗中位' }, scroll,
         h('div.hint-line', { style: { marginTop: '8px' } },
-          '电压/负载/温度是原始读数；P/D 等参数需要单颗读取，后端没上报时显示 —。'))));
+          '先打开该舵机的“保持”开关，再拖动位置滑块；“中位”会把当前物理位置写成 2048，请先扶稳机构。'))));
 
-  el = { canvas, viewSeg, board, takeover, actCard, poseSelect, scroll };
+  el = { canvas, viewSeg, board, takeover, actCard, poseSelect, scroll, centerAllBtn, centerUndoBtn };
   duck = createDuck(canvas, { mode: 'side', fill: 0.76 });
   duck.onPick = (id) => focusJoint(id, false);
 
@@ -127,6 +134,10 @@ export function mount(ctx) {
 }
 
 export function unmount() {
+  sliderGeneration += 1;
+  sliderQueue.clear();
+  sliderLastSent.clear();
+  sliderDragging.clear();
   if (unsub) unsub();
   unsub = null;
   pageCtx = null;
@@ -157,14 +168,16 @@ function paint(ctx) {
   duck?.setHighlight(expanded);
 
   // 表：只在数据形状变了（在线数/id 列表）时重建，其余只改数值
-  const key = `${items.length}|${draft.dirty}|${sess ? 1 : 0}`;
+  const key = `${items.map((item) => item.id).join(",")}|${sess ? 1 : 0}`;
   if (key !== lastItemsKey) {
     lastItemsKey = key;
     buildTable(ctx, items);
   }
-  updateRows(items, draft, sess);
+  updateRows(items, draft, sess, st.servos?.capabilities || {});
 
   el.poseSelect.disabled = !sess;
+  el.centerAllBtn.disabled = !sess || !st.servos?.capabilities?.center;
+  el.centerUndoBtn.disabled = !sess || !st.servos?.capabilities?.center;
 }
 
 function paintTakeover(ctx, sess, online, draft) {
@@ -201,7 +214,7 @@ async function take(ctx) {
 async function release(ctx) {
   try {
     await ctx.run('servo.bus', { op: 'release' });
-    toast('已交还主程序（舵机仍保持着）', 'ok');
+    toast('已退出维护；不会自动恢复行走，扭矩保持退出前状态', 'ok');
   } catch { /* 已提示 */ }
 }
 
@@ -213,55 +226,150 @@ function pose(name) {
   pageCtx.run('servo.pose', { name }).then(() => toast(`已到 ${name} 姿势`, 'ok')).catch(() => {});
 }
 
-/* ---------------------------------------------------------------- 表 */
+async function centerServos(ctx, ids) {
+  if (!session(ctx)) { toast('先接管总线', 'warn'); return; }
+  try {
+    const plan = await ctx.cmd('servo.center_plan', { ids }, { timeout: 20000 });
+    const rows = plan?.rows || [];
+    const large = rows.filter((r) => Math.abs(Number(r.diff_deg)) > Number(plan.warning_deg || 30));
+    const summary = rows.map((r) => `${r.id}号 ${r.pos} → 2048（${r.diff_deg > 0 ? '+' : ''}${r.diff_deg}°）`).join('\n');
+    const ok = await ctx.confirm({
+      title: `中位校准 ${rows.length} 颗舵机`,
+      message: `请先扶稳鸭子并摆成官方零位：腿伸直、头摆正、嘴闭合。\n\n${summary}${large.length ? `\n\n注意：${large.length} 颗偏差超过 ${plan.warning_deg}°。` : ''}\n\n必须先固定支撑机体并点击卸力，再执行校准。把当前位置写成 2048，保存可撤销备份；完成后保持卸力，不会自动加力。`,
+      okText: `确认校准 ${rows.length} 颗`,
+      danger: true,
+    });
+    if (!ok) return;
+    const res = await ctx.run('servo.center', { ids, confirm: true }, { timeout: 60000 });
+    readCache = new Map();
+    toast(`中位校准完成：${res?.centered?.length || rows.length} 颗`, 'ok', 5000);
+  } catch { /* 已提示 */ }
+}
+
+async function undoCenter(ctx) {
+  if (!session(ctx)) { toast('先接管总线', 'warn'); return; }
+  const ok = await ctx.confirm({
+    title: '撤销上一次中位校准',
+    message: '将把上一次校准前保存的舵机偏移写回 EEPROM。请扶稳鸭子。',
+    okText: '恢复备份',
+    danger: true,
+  });
+  if (!ok) return;
+  try {
+    const res = await ctx.run('servo.center_undo', { confirm: true }, { timeout: 60000 });
+    readCache = new Map();
+    toast(`已恢复 ${res?.restored?.length || 0} 颗舵机，原备份已归档`, 'ok');
+  } catch { /* 已提示 */ }
+}
+
+/* ---------------------------------------------------------------- 舵机控制卡 */
 function buildTable(ctx, items) {
   const byId = new Map(items.map((it) => [Number(it.id), it]));
   el.board.replaceChildren();
-  el.board.append(h('div.srv-head', {},
-    h('span', 'ID'), h('span', '名称'), h('span.cell', '位置'), h('span.cell', '负载'),
-    h('span.cell', '电压'), h('span.cell', '温度'), h('span.cell', '扭矩')));
-
   for (const g of GROUPS) {
-    el.board.append(h('div.srv-group', {},
-      h('span', g.name),
-      h('span.ids', g.ids.join(' · '))));
-    for (const id of g.ids) {
-      const it = byId.get(id) || null;
-      const row = h('div.srv-row', {
-        role: 'button',
-        tabindex: '0',
-        'aria-expanded': String(expanded === id),
-        dataset: { id: String(id) },
-        onclick: () => focusJoint(id),
-        onkeydown: (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); focusJoint(id); }
-        },
-      },
-      h('span.id', String(id)),
-      h('span.nm', { title: JOINTS.find((j) => j.id === id)?.key || '' }, NAME_CN[id] || '—'),
-      cell('pos', it ? fmt.int(it.pos) : DASH),
-      cell('load', it ? fmt.f1(it.load) : DASH),
-      cell('volt', it ? fmt.f2(it.volt) : DASH),
-      cell('temp', it ? fmt.f1(it.temp) : DASH),
-      h('span.torque-cell', {}, torqueSwitch(id, it)));
-      el.board.append(row);
-      if (expanded === id) el.board.append(detailRow(ctx, id));
-    }
+    const cards = h('div.srv-card-grid');
+    for (const id of g.ids) cards.append(servoCard(ctx, id, byId.get(id) || null));
+    el.board.append(h('section.srv-group-card', {},
+      h('div.srv-group-title', {}, h('span', g.name), h('span.ids', `${g.ids.join(' · ')} 号舵机`)), cards));
   }
 }
 
-function cell(name, value) {
-  return h('span.cell', { class: name }, value);
+function servoCard(ctx, id, it) {
+  const card = h('article.srv-card', { dataset: { id: String(id) } },
+    h('div.srv-card-top', {},
+      h('div', {},
+        h('div.srv-card-name', {}, h('span.srv-card-id', `#${id}`), h('span', NAME_CN[id] || '—')),
+        h('div.srv-card-key', {}, JOINTS.find((j) => j.id === id)?.key || '')),
+      h('div.srv-card-reading', {},
+        h('span.label', '当前位置'), h('span.pos', it ? fmt.int(it.pos) : DASH))),
+    servoSlider(id, it),
+    h('div.srv-card-bottom', {},
+      cell('temp', it ? `${fmt.f1(it.temp)}°C` : DASH, '温度'),
+      h('span.torque-cell', { 'data-label': get(ctx.state(), 'servos.source') === 'robotd' ? '调试保持' : '保持' }, torqueSwitch(id, it)),
+      h('span.center-cell', { 'data-label': '中位校准' }, btn('设中位', {
+        size: 'sm', disabled: !session(ctx),
+        onClick: (e) => { e?.stopPropagation?.(); centerServos(ctx, [id]); },
+      }))));
+  card.addEventListener('click', () => focusJoint(id, false));
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusJoint(id, false); } });
+  card.tabIndex = 0;
+  if (expanded === id) card.append(detailRow(ctx, id));
+  return card;
+}
+
+function cell(name, value, label = '') {
+  return h('span.cell', { class: name, 'data-label': label }, value);
+}
+
+function sendSliderGoal(id, value, force = false) {
+  let job = sliderQueue.get(id);
+  if (!job) {
+    job = { pending: null, running: false, generation: sliderGeneration, ctx: pageCtx };
+    sliderQueue.set(id, job);
+  }
+  job.pending = Number(value);
+  if (job.running) return;
+  job.running = true;
+  const pump = async () => {
+    while (job.pending != null && job.generation === sliderGeneration) {
+      const delay = Math.max(0, 50 - (performance.now() - (sliderLastSent.get(id) || 0)));
+      if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+      if (job.generation !== sliderGeneration) break;
+      const pos = job.pending;
+      job.pending = null;
+      sliderLastSent.set(id, performance.now());
+      try { await job.ctx.run('servo.goal', { id, pos }, { timeout: 3000 }); }
+      catch { job.pending = null; break; }
+    }
+    job.running = false;
+  };
+  void pump();
+}
+
+function servoSlider(id, it) {
+  const torqueOn = it?.torque === true;
+  const input = h('input.srv-slider', {
+    type: 'range', min: '0', max: '4095', step: '1',
+    value: String(it?.pos ?? 2048),
+    disabled: !session(pageCtx) || !torqueOn,
+    'aria-label': `${id} 号目标位置`,
+    title: torqueOn ? '拖动控制目标位置；每 50 ms 最多发送一次' : '先打开这颗舵机的保持，再拖动',
+  });
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('pointerdown', (e) => { e.stopPropagation(); sliderDragging.add(id); });
+  input.addEventListener('input', (e) => {
+    e.stopPropagation();
+    sliderDragging.add(id);
+    sendSliderGoal(id, e.target.value, false);
+    const card = e.target.closest('.srv-card');
+    const pos = card?.querySelector('.pos');
+    if (pos) pos.textContent = e.target.value;
+    // 拖动时先按目标值预览 3D；后端 50 Hz 回读一到就会用真实位置校正。
+    const pose = duck?.pose;
+    const index = JOINTS.findIndex((joint) => joint.id === id);
+    if (pose && index >= 0) {
+      pose[index] = Number(e.target.value);
+      duck.setPose(pose, true);
+    }
+  });
+  const done = (e) => {
+    e.stopPropagation();
+    sendSliderGoal(id, e.target.value, true);
+    window.setTimeout(() => sliderDragging.delete(id), 600);
+  };
+  input.addEventListener('change', done);
+  return h('div.slider-cell', { 'data-label': '目标位置（拖动）' }, input);
 }
 
 function torqueSwitch(id, it) {
-  const on = it ? it.torque !== false : false;
+  const on = it?.torque === true;
   const sw = h('button', {
     class: 'switch',
     type: 'button',
     role: 'switch',
     'aria-checked': on ? 'true' : 'false',
     'aria-label': `${id} 号扭矩开关`,
+    title: '通过主控维护会话显式切换扭矩；加力前会先建立当前位置保持目标。',
     disabled: !session(pageCtx),
   });
   sw.addEventListener('click', (e) => {
@@ -275,28 +383,33 @@ function torqueSwitch(id, it) {
   return sw;
 }
 
-function updateRows(items, draft, sess) {
+function updateRows(items, draft, sess, capabilities) {
   const byId = new Map(items.map((it) => [Number(it.id), it]));
-  for (const row of el.board.querySelectorAll('.srv-row')) {
-    const id = Number(row.dataset.id);
+  for (const card of el.board.querySelectorAll('.srv-card')) {
+    const id = Number(card.dataset.id);
     const it = byId.get(id);
     const set = (cls, v) => {
-      const n = row.querySelector(`.${cls}`);
+      const n = card.querySelector(`.${cls}`);
       if (n && n.textContent !== String(v)) n.textContent = String(v);
     };
-    set('pos', it ? fmt.int(it.pos) : DASH);
-    set('load', it ? fmt.f1(it.load) : DASH);
-    set('volt', it ? fmt.f2(it.volt) : DASH);
+    if (!sliderDragging.has(id)) {
+      set('pos', it ? fmt.int(it.pos) : DASH);
+      const slider = card.querySelector('.srv-slider');
+      if (slider && it?.pos != null) slider.value = String(it.pos);
+    }
     const temp = it ? it.temp : null;
-    set('temp', temp == null ? DASH : fmt.f1(temp));
-    row.querySelector('.temp')?.classList.toggle('hot', typeof temp === 'number' && temp >= 65);
-    const off = it && it.torque === false;
-    row.classList.toggle('is-off', Boolean(off));
-    const sw = row.querySelector('.switch');
+    set('temp', temp == null ? DASH : `${fmt.f1(temp)}°C`);
+    card.querySelector('.temp')?.classList.toggle('hot', typeof temp === 'number' && temp >= 65);
+    card.classList.toggle('is-off', !it || it.torque !== true);
+    const sw = card.querySelector('.switch');
     if (sw) {
-      if (it) sw.setAttribute('aria-checked', it.torque === false ? 'false' : 'true');
+      if (it) sw.setAttribute('aria-checked', it.torque === true ? 'true' : 'false');
       sw.disabled = !sess;
     }
+    const slider = card.querySelector('.srv-slider');
+    if (slider) slider.disabled = !sess || !it || it.torque !== true || !capabilities.single_goal;
+    const centerBtn = card.querySelector('.center-cell button');
+    if (centerBtn) centerBtn.disabled = !sess || !capabilities.center;
   }
   const det = el.board.querySelector('.srv-detail');
   if (det && expanded != null) updateDetail(det, expanded);
@@ -313,8 +426,10 @@ function detailRow(ctx, id) {
   const direction = get(draft, `items.${id}.direction`) ?? val('direction');
   const min = get(draft, `items.${id}.min`) ?? val('min');
   const max = get(draft, `items.${id}.max`) ?? val('max');
-  const p = val('p') ?? val('pos_p') ?? val('kp');
-  const d = val('d') ?? val('pos_d') ?? val('kd');
+  const p = val('p_run') ?? val('p') ?? val('pos_p') ?? val('kp');
+  const d = val('d_run') ?? val('d') ?? val('pos_d') ?? val('kd');
+  const torqueLimit = val('torque_limit');
+  const phase = val('phase');
 
   const trimBox = h('div.row', { style: { gap: '4px', marginTop: '6px' } },
     btn('−10', { size: 'sm', onClick: () => trim(id, -10) }),
@@ -324,20 +439,24 @@ function detailRow(ctx, id) {
 
   box.append(
     h('div', {},
-      h('div.subhead', '标定'),
-      h('div.kv', {}, h('span.kv-k', '0 位偏移'), h('span.kv-v.mono', offset === undefined || offset === null ? DASH : String(offset))),
-      h('div.kv', {}, h('span.kv-k', '方向'), h('span.kv-v', direction === undefined || direction === null ? DASH : (Number(direction) < 0 ? '反向（−1）' : '正向（+1）'))),
+      h('div.subhead', '零位标定'),
+      h('div.kv', {}, h('span.kv-k', '零位偏移'), h('span.kv-v.mono', offset === undefined || offset === null ? DASH : String(offset))),
+      h('div.kv', {}, h('span.kv-k', '软件方向'), h('span.kv-v', direction === undefined || direction === null ? DASH : (Number(direction) < 0 ? '反向（−1）' : '正向（+1）'))),
+      h('div.kv', {}, h('span.kv-k', '相位寄存器'), h('span.kv-v.mono', phase == null ? DASH : `${phase}（保持固件速度位）`)),
       h('div.kv', {}, h('span.kv-k', '限位'), h('span.kv-v.mono', `${min ?? DASH} – ${max ?? DASH}`)),
       trimBox),
     h('div', {},
-      h('div.subhead', 'P / D'),
-      h('div.kv', {}, h('span.kv-k', '位置 P'), h('span.kv-v.mono', p == null ? DASH : fmt.int(p))),
-      h('div.kv', {}, h('span.kv-k', '位置 D'), h('span.kv-v.mono', d == null ? DASH : fmt.int(d))),
+      h('div.subhead', '运行参数'),
+      h('div.kv', {}, h('span.kv-k', '位置环 P'), h('span.kv-v.mono', p == null ? DASH : fmt.int(p))),
+      h('div.kv', {}, h('span.kv-k', '位置环 D'), h('span.kv-v.mono', d == null ? DASH : fmt.int(d))),
+      h('div.kv', {}, h('span.kv-k', '转矩限制'), h('span.kv-v.mono', torqueLimit == null ? DASH : fmt.int(torqueLimit))),
       h('div.hint-line', { style: { marginTop: '6px' } },
-        p == null && d == null ? '后端没上报这项，单颗读取后才有。' : '参数只读展示，改动请走寄存器编辑。')),
+        p == null && d == null ? '单颗读取后显示运行参数。' : '安全上力时使用：P5 · D0 · 转矩限制 1000。')),
     h('div.stack-8', {},
+      h('div.subhead', '高级操作'),
+      btn('设为中位 2048', { kind: 'primary', disabled: !session(ctx), onClick: () => centerServos(ctx, [id]) }),
       btn('编辑寄存器', { kind: 'outline', icon: 'settings', onClick: () => openRegs(ctx, id) }),
-      btn(session(ctx) ? '单颗读取' : '接管后读取', {
+      btn(session(ctx) ? '读取当前舵机' : '接管后读取', {
         size: 'sm',
         disabled: !session(ctx),
         onClick: () => readOne(ctx, id),
@@ -357,7 +476,7 @@ function updateDetail(box, id) {
     const max = get(d, `items.${id}.max`);
     if (offset !== undefined) nodes[0].textContent = String(offset);
     if (direction !== undefined) nodes[1].textContent = Number(direction) < 0 ? '反向（−1）' : '正向（+1）';
-    if (min !== undefined || max !== undefined) nodes[2].textContent = `${min ?? DASH} – ${max ?? DASH}`;
+    if (min !== undefined || max !== undefined) nodes[3].textContent = `${min ?? DASH} – ${max ?? DASH}`;
   }
 }
 
@@ -394,7 +513,7 @@ async function readAll() {
 async function trim(id, delta) {
   try {
     const res = await pageCtx.run('servo.trim', { id, delta });
-    toast(`${id} 号 0 位偏移 → ${res?.offset ?? '—'}`, 'ok', 2200);
+    toast(`${id} 号零位偏移 → ${res?.offset ?? '—'}`, 'ok', 2200);
     readCache.delete(id);
   } catch { /* 已提示 */ }
 }
@@ -434,7 +553,7 @@ async function openRegs(ctx, id) {
         h('span', {}, '写 EEPROM（掉电保存）—— 改错会一直错，直到再用寄存器改回来'))),
     dangerBox,
     h('div.note', {}, icon('info', 15),
-      h('div', {}, '改的是真硬件。0 位与方向建议用上面的「0 位偏移」按钮，别直接写寄存器。')));
+      h('div', {}, '这里修改的是真实硬件寄存器。零位请使用页面上的微调或“中位校准”，不要直接改偏移寄存器。')));
 
   const ok = await ctx.confirm({
     title: `改 ${id} 号舵机寄存器`,
@@ -478,13 +597,10 @@ async function openRegs(ctx, id) {
 /* ---------------------------------------------------------------- 联动 */
 function focusJoint(id, toggle = true) {
   expanded = toggle && expanded === id ? null : id;
-  for (const row of el.board.querySelectorAll('.srv-row')) {
-    row.setAttribute('aria-expanded', String(Number(row.dataset.id) === expanded));
-  }
   buildTable(pageCtx, get(pageCtx.state(), 'servos.items', []) || []);
   duck?.setHighlight(expanded);
   if (expanded != null) {
-    const row = el.board.querySelector(`.srv-row[data-id="${expanded}"]`);
-    row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const card = el.board.querySelector(`.srv-card[data-id="${expanded}"]`);
+    card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 }

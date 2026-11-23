@@ -1,3 +1,4 @@
+let checklistNodes = null;
 /* 总控：深空舞台 + 上手清单 + 仪表带 + 快捷遥控。
    所有结论都从真实 state 推，没有数据就写"待做/没有数据"，不编状态。 */
 
@@ -8,7 +9,6 @@ import { link } from '../link.js';
 let duck = null;
 let el = {};
 let unsub = null;
-let checklistNodes = null;
 
 const POSTURE_COPY = {
   absent: { say: '还没连上主控', hint: '检查电源和总线，再刷新这一页', next: null },
@@ -22,6 +22,7 @@ const POSTURE_COPY = {
 };
 
 export function page(ctx) {
+  checklistNodes = null;
   const stageCanvas = h('canvas', { 'aria-label': 'MicroDuck 当前三维姿态模型，可拖动旋转查看' });
 
   const canvasBox = h('div.stage-canvas-box', {}, stageCanvas);
@@ -72,14 +73,14 @@ export function page(ctx) {
 
   /* ---------------- 快捷遥控 ---------------- */
   const remote = h('div.remote', {},
-    quickBtn('站起来', '站姿 · stand', 'arrowUp', () => slot(ctx, 'stand')),
-    quickBtn('开始走', '走 · walk', 'play', () => slot(ctx, 'walk')),
-    quickBtn('坐下', '坐 · sitstand', 'chevronDown', () => slot(ctx, 'sitstand')),
-    quickBtn('卸力', '急停 · 空格', 'bolt', () => relax(ctx), 'btn-danger'));
+    quickBtn('站起来', '恢复站立姿势', 'arrowUp', () => slot(ctx, 'stand')),
+    quickBtn('开始走', '启动行走控制', 'play', () => slot(ctx, 'walk')),
+    quickBtn('坐下', '切换到坐下姿势', 'chevronDown', () => slot(ctx, 'sitstand')),
+    quickBtn('卸力', '立即关闭全部扭矩', 'bolt', () => relax(ctx), 'danger'));
 
-  const remoteCard = card({ title: '快捷遥控', sub: '和手柄、空格键走同一条命令通道' }, remote,
+  const remoteCard = card({ title: '快捷遥控', sub: '控制命令与手柄、空格键保持一致' }, remote,
     h('div.hint-line', { style: { marginTop: '10px' } },
-      '「卸力」就是急停，四路同源：顶栏红键、空格、手柄 Start、这里。避障不会解除急停。'));
+      '“卸力”会立即关闭全部扭矩；可通过顶栏急停、空格键或手柄 Start 执行。'));
 
   const pageEl = h('div.page', {},
     h('div.page-head', {},
@@ -117,7 +118,6 @@ export function unmount() {
   duck?.destroy();
   duck = null;
   el = {};
-  checklistNodes = null;
 }
 
 function onResize() {
@@ -206,10 +206,14 @@ function relax(ctx) {
   ctx.run('relax', {}).catch(() => {});
 }
 
-function quickBtn(label, sub, iconName, onClick, kind = '') {
-  const b = btn(null, { kind, class: 'remote-btn', onClick });
-  b.replaceChildren(icon(iconName, 17), h('span', {}, label), h('small', {}, sub));
-  return b;
+function quickBtn(label, sub, iconName, onClick, tone = '') {
+  return h('button.remote-card', {
+    type: 'button',
+    class: tone ? `is-${tone}` : '',
+    onClick,
+  },
+  h('span.remote-icon', {}, icon(iconName, 18)),
+  h('span.remote-copy', {}, h('span.remote-label', {}, label), h('span.remote-sub', {}, sub)));
 }
 
 function gauge(label, key) {

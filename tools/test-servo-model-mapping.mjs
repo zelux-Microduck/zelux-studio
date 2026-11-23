@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+const raw = readFileSync(new URL('../js/duck2d.js', import.meta.url), 'utf8');
+const model = readFileSync(new URL('../duck3d.js', import.meta.url), 'utf8');
+const names = model.slice(model.indexOf('export const JOINT_NAMES'), model.indexOf('const VIEWS')).replace('export const JOINT_NAMES', 'const MODEL_JOINT_NAMES');
+const code = raw.slice(raw.indexOf('export const JOINTS'), raw.indexOf('function gravityFrom')).replaceAll('export ', '');
+const ctx = vm.createContext({});
+vm.runInContext(names + code, ctx);
+const joints = Array.from({length: 15}, (_, index) => index / 10);
+assert.deepEqual(Array.from(ctx.mapRobotJointValues(joints)), joints, 'robotd and CAD are both left/head/right order');
+assert.equal(ctx.rad(2048), 0);
+assert.ok(ctx.rad(3072) > 0, 'do not silently invert every model');
+console.log('PASS: robotd array order and direction-neutral raw tick conversion');

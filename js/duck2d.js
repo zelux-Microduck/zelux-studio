@@ -2,21 +2,21 @@
 import { Duck3D, JOINT_NAMES as MODEL_JOINT_NAMES } from '../duck3d.js';
 
 export const JOINTS = [
-  { id: 10, idx: 0, key: 'r_hip_yaw', cn: '右髋偏转', group: '右腿' },
-  { id: 11, idx: 1, key: 'r_hip_roll', cn: '右髋侧摆', group: '右腿' },
-  { id: 12, idx: 2, key: 'r_hip_pitch', cn: '右髋俯仰', group: '右腿' },
-  { id: 13, idx: 3, key: 'r_knee', cn: '右膝', group: '右腿' },
-  { id: 14, idx: 4, key: 'r_ankle', cn: '右踝', group: '右腿' },
-  { id: 20, idx: 5, key: 'l_hip_yaw', cn: '左髋偏转', group: '左腿' },
-  { id: 21, idx: 6, key: 'l_hip_roll', cn: '左髋侧摆', group: '左腿' },
-  { id: 22, idx: 7, key: 'l_hip_pitch', cn: '左髋俯仰', group: '左腿' },
-  { id: 23, idx: 8, key: 'l_knee', cn: '左膝', group: '左腿' },
-  { id: 24, idx: 9, key: 'l_ankle', cn: '左踝', group: '左腿' },
-  { id: 30, idx: 10, key: 'neck_pan', cn: '脖子左右', group: '头颈' },
-  { id: 31, idx: 11, key: 'neck_tilt', cn: '脖子俯仰', group: '头颈' },
-  { id: 32, idx: 12, key: 'head_pan', cn: '头左右', group: '头颈' },
-  { id: 33, idx: 13, key: 'head_tilt', cn: '头俯仰', group: '头颈' },
-  { id: 34, idx: 14, key: 'beak', cn: '喙', group: '头颈' },
+  { id: 10, idx: 0, key: 'right_hip_yaw', cn: '右髋偏航', group: '右腿' },
+  { id: 11, idx: 1, key: 'right_hip_roll', cn: '右髋横滚', group: '右腿' },
+  { id: 12, idx: 2, key: 'right_hip_pitch', cn: '右髋俯仰', group: '右腿' },
+  { id: 13, idx: 3, key: 'right_knee', cn: '右膝', group: '右腿' },
+  { id: 14, idx: 4, key: 'right_ankle', cn: '右踝', group: '右腿' },
+  { id: 20, idx: 5, key: 'left_hip_yaw', cn: '左髋偏航', group: '左腿' },
+  { id: 21, idx: 6, key: 'left_hip_roll', cn: '左髋横滚', group: '左腿' },
+  { id: 22, idx: 7, key: 'left_hip_pitch', cn: '左髋俯仰', group: '左腿' },
+  { id: 23, idx: 8, key: 'left_knee', cn: '左膝', group: '左腿' },
+  { id: 24, idx: 9, key: 'left_ankle', cn: '左踝', group: '左腿' },
+  { id: 30, idx: 10, key: 'neck_pitch', cn: '颈部俯仰', group: '头颈' },
+  { id: 31, idx: 11, key: 'head_pitch', cn: '头部俯仰', group: '头颈' },
+  { id: 32, idx: 12, key: 'head_yaw', cn: '头部偏航', group: '头颈' },
+  { id: 33, idx: 13, key: 'head_roll', cn: '头部横滚', group: '头颈' },
+  { id: 34, idx: 14, key: 'mouth', cn: '嘴巴', group: '头颈' },
 ];
 
 export const JOINT_MAP = new Map(JOINTS.map((joint) => [joint.id, joint]));
@@ -30,7 +30,8 @@ const JOINT_ID_BY_MODEL_NAME = {
   right_hip_yaw: 10, right_hip_roll: 11, right_hip_pitch: 12, right_knee: 13, right_ankle: 14,
 };
 const MODEL_INDEX_BY_ID = new Map(MODEL_JOINT_NAMES.map((name, index) => [JOINT_ID_BY_MODEL_NAME[name], index]));
-const BACKEND_INDEX_BY_ID = new Map(JOINTS.map((joint) => [joint.id, joint.idx]));
+const ROBOTD_IDS = [20, 21, 22, 23, 24, 30, 31, 32, 33, 34, 10, 11, 12, 13, 14];
+const BACKEND_INDEX_BY_ID = new Map(ROBOTD_IDS.map((id, index) => [id, index]));
 const BACKEND_NAME_BY_MODEL_NAME = {
   left_hip_yaw: 'l_hip_yaw', left_hip_roll: 'l_hip_roll', left_hip_pitch: 'l_hip_pitch', left_knee: 'l_knee', left_ankle: 'l_ankle',
   neck_pitch: 'neck_pan', head_pitch: 'neck_tilt', head_yaw: 'head_pan', head_roll: 'head_tilt', mouth: 'beak',
@@ -76,11 +77,11 @@ function cssColor(name, fallback) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
 
-function modelJointsFromTicks(ticks) {
+function modelJointsFromTicks(ticks, directions = null) {
   const values = new Array(MODEL_JOINT_NAMES.length).fill(0);
   for (const joint of JOINTS) {
     const modelIndex = MODEL_INDEX_BY_ID.get(joint.id);
-    if (modelIndex != null) values[modelIndex] = rad(ticks[joint.idx]);
+    if (modelIndex != null) values[modelIndex] = rad(ticks[joint.idx]) * (directions?.get(joint.id) ?? 1);
   }
   return values;
 }
@@ -143,6 +144,7 @@ export function createDuck(canvas, opts = {}) {
   let currentPose = new Float64Array(15).fill(CENTER);
   let directPose = null;
   let source = '中位姿态';
+  let directions = null;
   let gravity = null;
   let onPick = null;
   let loadError = '';
@@ -201,12 +203,12 @@ export function createDuck(canvas, opts = {}) {
       applySelection();
       updateStatus();
     };
-    renderer.setJoints(modelJointsFromTicks(currentPose));
+    renderer.setJoints(modelJointsFromTicks(currentPose, directions));
     renderer.load(new URL('../model/', import.meta.url).href).then(() => {
       if (!alive) return;
       applyTheme();
       renderer.setView(viewName());
-      renderer.setJoints(directPose || modelJointsFromTicks(currentPose));
+      renderer.setJoints(directPose || modelJointsFromTicks(currentPose, directions));
       renderer.setGravity(gravity);
       applySelection();
       updateStatus();
@@ -220,33 +222,39 @@ export function createDuck(canvas, opts = {}) {
   function setPose(pose, immediate = false) {
     currentPose = normalizePose(pose);
     directPose = null;
-    source = pose ? '舵机刻度估算（0 位偏移/方向未验证）' : '中位姿态（非实时）';
-    renderer?.setJoints(modelJointsFromTicks(currentPose));
+    source = pose ? '舵机实时刻度（已应用零位和软件方向）' : '中位姿态（非实时）';
+    renderer?.setJoints(modelJointsFromTicks(currentPose, directions));
     updateStatus();
     return immediate;
   }
 
   function setState(state = {}) {
     const robotState = state?.robot?.state;
+    const rows = state?.servos?.items || [];
+    directions = new Map(rows.filter((row) => [-1, 1].includes(row.model_direction)).map((row) => [Number(row.id), row.model_direction]));
     const direct = mapRobotJointValues(robotState?.joints);
     gravity = gravityFrom(state);
     if (direct) {
       directPose = direct;
       renderer?.setJoints(directPose);
-      source = 'robot.state.joints 实时弧度';
+      const hz = state?.robot?.telemetry?.sample_hz;
+      source = 'robotd 实测关节' + (Number.isFinite(hz) ? ' · ' + hz.toFixed(1) + ' Hz' : '');
     } else {
       directPose = null;
       const ticks = ticksFromState(state);
       if (ticks) currentPose = ticks;
-      renderer?.setJoints(modelJointsFromTicks(currentPose));
-      source = ticks ? '舵机刻度估算（0 位偏移/方向未验证）' : '中位姿态（非实时）';
+      renderer?.setJoints(modelJointsFromTicks(currentPose, directions));
+      source = ticks ? (directions.size === JOINTS.length ? '舵机反馈（robotd 逐关节方向）' : '舵机刻度示意（方向未确认，非标定位姿）') : '中位姿态（非实时）';
+      if (state?.robot?.telemetry?.fresh === false) source = '高频反馈不可用 · ' + source;
     }
     renderer?.setGravity(gravity);
     updateStatus();
   }
 
   function setHighlight(id) {
-    selectedId = id == null ? null : Number(id);
+    const nextId = id == null ? null : Number(id);
+    if (selectedId === nextId) return;
+    selectedId = nextId;
     applySelection();
     updateStatus();
   }
