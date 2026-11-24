@@ -92,11 +92,13 @@ export function page(ctx) {
   const scroll = h('div.srv-scroll', {}, board);
 
   const takeover = h('div.takeover');
+  const directionApplyBtn = btn('应用软件方向', { disabled: !ctx.link?.online, onClick: () => applySavedDirections(ctx) });
   const header = h('div.row-between', {},
     h('div', {},
       h('h1.page-title', '舵机'),
       h('div.page-desc', '15 颗 · 右腿 10–14 / 左腿 20–24 / 头颈 30–34。点行展开详情，点左边关节也能展开。')),
     h('div.page-head-actions', {},
+      directionApplyBtn,
       btn('读取全部', { icon: 'refresh', onClick: () => readAll() }),
       btn('回总控', { onClick: () => ctx.go('/') })));
 
@@ -109,11 +111,11 @@ export function page(ctx) {
               h('span.hint-line', {}, '点关节高亮')),
             h('div.srv-hint', {}, '使用 MicroDuck CAD 模型实时显示 15 个关节。点模型可定位对应舵机；优先使用主控实时姿态；维护反馈按 robotd 提供的逐关节方向换算，方向缺失会明确标为示意。'))),
         actCard),
-      card({ title: '舵机控制', sub: '每行功能依次为：拖动目标、当前位置、温度、保持开关、单颗中位' }, scroll,
+      card({ title: '舵机控制', sub: '每颗独立设置：目标位置、保持、中位、软件方向；方向保存后点页顶应用' }, scroll,
         h('div.hint-line', { style: { marginTop: '8px' } },
           '先打开该舵机的“保持”开关，再拖动位置滑块；“中位”会把当前物理位置写成 2048，请先扶稳机构。'))));
 
-  el = { canvas, viewSeg, board, takeover, actCard, poseSelect, scroll, centerAllBtn, centerUndoBtn };
+  el = { canvas, viewSeg, board, takeover, actCard, poseSelect, scroll, centerAllBtn, centerUndoBtn, directionApplyBtn };
   duck = createDuck(canvas, { mode: 'side', fill: 0.76 });
   duck.onPick = (id) => focusJoint(id, false);
 
@@ -178,6 +180,7 @@ function paint(ctx) {
   el.poseSelect.disabled = !sess;
   el.centerAllBtn.disabled = !sess || !st.servos?.capabilities?.center;
   el.centerUndoBtn.disabled = !sess || !st.servos?.capabilities?.center;
+  el.directionApplyBtn.disabled = !online;
 }
 
 function paintTakeover(ctx, sess, online, draft) {
@@ -289,6 +292,10 @@ function servoCard(ctx, id, it) {
       h('span.center-cell', { 'data-label': '中位校准' }, btn('设中位', {
         size: 'sm', disabled: !session(ctx),
         onClick: (e) => { e?.stopPropagation?.(); centerServos(ctx, [id]); },
+      })),
+      h('span.direction-cell', { 'data-label': '软件方向' }, btn('配置方向', {
+        size: 'sm', disabled: !ctx.link?.online,
+        onClick: (e) => { e?.stopPropagation?.(); configureDirection(ctx, id); },
       }))));
   card.addEventListener('click', () => focusJoint(id, false));
   card.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusJoint(id, false); } });
@@ -299,6 +306,68 @@ function servoCard(ctx, id, it) {
 
 function cell(name, value, label = '') {
   return h('span.cell', { class: name, 'data-label': label }, value);
+}
+
+const directionJobs = new Set();
+let directionRestarting = false;
+
+async function configureDirection(ctx, id) {
+  if (directionJobs.has(id)) return;
+  directionJobs.add(id);
+  try {
+    const status = await ctx.cmd('servo.direction', { action: 'status' }, { timeout: 8000 });
+    const index = status?.ids?.indexOf(id);
+    if (status?.schema !== 'zelux.servo-directions/v1' || index == null || index < 0
+        || ![-1, 1].includes(status.saved?.[index]) || ![-1, 1].includes(status.runtime?.[index])) {
+      toast('robotd 未提供完整的软件方向配置，请更新配套版本', 'warn'); return;
+    }
+    const label = value => value === -1 ? '反向（−1）' : '正向（+1）';
+    const direction = h('select', { 'aria-label': id + ' 号舵机软件方向' },
+      h('option', { value: '1' }, '正向（+1）'), h('option', { value: '-1' }, '反向（−1）'));
+    direction.value = String(status.saved[index]);
+    const ok = await ctx.confirm({
+      title: id + ' 号 · ' + (NAME_CN[id] || '') + '软件方向',
+      body: h('div.stack-8', {},
+        h('div', {}, '当前生效：' + label(status.runtime[index]) + '；已保存：' + label(status.saved[index])),
+        h('label', {}, '软件方向 ', direction),
+        h('div.note', {}, '统一影响 robotd 的关节反馈、控制换算与 Studio 三维显示。不会写舵机相位寄存器，也不改变中位。保存后需安全重启；不要仅为视觉效果随意修改腿部方向。'),
+        h('div', {}, status.pending_restart ? '存在已保存但尚未生效的方向。关闭此窗口后，可点页顶“应用软件方向”。' : '方向配置已生效。')),
+      okText: '保存方向', danger: true,
+    });
+    if (!ok) return;
+    const result = await ctx.run('servo.direction', {
+      action: 'save', id, direction: Number(direction.value), expected: status.saved, confirmed: true,
+    }, { timeout: 8000 });
+    toast(result.pending_restart ? '软件方向已保存，待安全重启 robotd；请点页顶“应用软件方向”' : '软件方向已保存并与运行配置一致', 'ok');
+  } catch (error) { toastError(error); }
+  finally { directionJobs.delete(id); }
+}
+
+async function applySavedDirections(ctx) {
+  try {
+    const status = await ctx.cmd('servo.direction', { action: 'status' }, { timeout: 8000 });
+    if (status?.schema !== 'zelux.servo-directions/v1' || !status.pending_restart) {
+      toast('没有待应用的软件方向配置；可在各舵机卡片点击“配置方向”', 'warn'); return;
+    }
+    await restartDirections(ctx, status.saved);
+  } catch (error) { toastError(error); }
+}
+
+async function restartDirections(ctx, expected) {
+  if (directionRestarting) return;
+  directionRestarting = true;
+  try {
+    const ok = await ctx.confirm({
+      title: '重启 robotd 应用软件方向',
+      body: h('div', {}, '请固定支撑机器人并停止运动。将退出舵机维护（如有），然后请求安全重启 robotd。重启可能改变保持状态；启动后的控制和三维反馈将使用新方向。'),
+      okText: '退出维护并请求重启', danger: true,
+    });
+    if (!ok) return;
+    if (session(ctx)) await ctx.run('servo.bus', { op: 'release' });
+    await ctx.run('servo.direction', { action: 'restart', expected, confirmed: true }, { timeout: 8000 });
+    toast('已请求重启 robotd；等待连接恢复后重新打开“配置方向”核对生效状态', 'ok');
+  } catch (error) { toastError(error); }
+  finally { directionRestarting = false; }
 }
 
 function sendSliderGoal(id, value, force = false) {
@@ -410,6 +479,8 @@ function updateRows(items, draft, sess, capabilities) {
     if (slider) slider.disabled = !sess || !it || it.torque !== true || !capabilities.single_goal;
     const centerBtn = card.querySelector('.center-cell button');
     if (centerBtn) centerBtn.disabled = !sess || !capabilities.center;
+    const directionBtn = card.querySelector('.direction-cell button');
+    if (directionBtn) directionBtn.disabled = !pageCtx.link?.online;
   }
   const det = el.board.querySelector('.srv-detail');
   if (det && expanded != null) updateDetail(det, expanded);
@@ -423,7 +494,7 @@ function detailRow(ctx, id) {
 
   const val = (key) => rec?.[key] ?? null;
   const offset = val('offset') ?? get(draft, `items.${id}.offset`);
-  const direction = get(draft, `items.${id}.direction`) ?? val('direction');
+  const direction = (get(ctx.state(), 'servos.items', []) || []).find(item => Number(item.id) === id)?.model_direction;
   const min = get(draft, `items.${id}.min`) ?? val('min');
   const max = get(draft, `items.${id}.max`) ?? val('max');
   const p = val('p_run') ?? val('p') ?? val('pos_p') ?? val('kp');
@@ -469,13 +540,13 @@ function detailRow(ctx, id) {
 function updateDetail(box, id) {
   const d = get(pageCtx.state(), 'servos.draft', {}) || {};
   const nodes = box.querySelectorAll('.kv-v');
-  if (nodes.length >= 3) {
+  if (nodes.length >= 4) {
     const offset = get(d, `items.${id}.offset`);
-    const direction = get(d, `items.${id}.direction`);
+    const direction = (get(pageCtx.state(), 'servos.items', []) || []).find(item => Number(item.id) === id)?.model_direction;
     const min = get(d, `items.${id}.min`);
     const max = get(d, `items.${id}.max`);
     if (offset !== undefined) nodes[0].textContent = String(offset);
-    if (direction !== undefined) nodes[1].textContent = Number(direction) < 0 ? '反向（−1）' : '正向（+1）';
+    nodes[1].textContent = [-1, 1].includes(direction) ? (direction < 0 ? '反向（−1）' : '正向（+1）') : DASH;
     if (min !== undefined || max !== undefined) nodes[3].textContent = `${min ?? DASH} – ${max ?? DASH}`;
   }
 }
