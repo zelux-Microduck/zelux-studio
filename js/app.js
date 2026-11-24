@@ -414,7 +414,7 @@ async function fireEstop() {
     if (data && data.ok === false) {
       toast(data.error || '卸力没成功', 'error', 6000);
     } else {
-      toast('已全部卸力', 'ok', 2400);
+      toast(data?.state === 'pending' ? (data.note || '已提交急停请求，等待硬件确认') : '已全部卸力', 'ok', 2400);
     }
   } catch (err) {
     toastError(err);

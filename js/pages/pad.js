@@ -154,7 +154,8 @@ export function page(ctx) {
     h('div.stick-read', {},
       axisBox('lx', '左右'), axisBox('ly', '前后'), axisBox('rx', '转向'), axisBox('ry', '备用')),
     h('div.row', { style: { marginTop: '10px', flexWrap: 'wrap' } },
-      h('span.hint-line.grow', {}, '每 100 ms 发一次 pad.sticks（带递增 seq），松手发 pad.stop。'),
+      h('span.hint-line.grow', {}, '先启用驾驶，再推摇杆；Options 是急停卸力。IMU、策略或维护状态异常时不能启用。'),
+      btn('启用驾驶', { size: 'sm', kind: 'primary', onClick: () => drive(true) }),
       btn('松开油门', { size: 'sm', kind: 'warn', onClick: () => drive(false) })));
 
   el = {
@@ -199,14 +200,17 @@ function axisBox(key, label) {
 
 export function mount(ctx) {
   ctxRef = ctx;
+  axes.lx = axes.ly = axes.rx = axes.ry = 0;
   axisBox.map = {};
   unsub = ctx.store.subscribe(() => paint(ctx));
   buildBindings(ctx);
   paint(ctx);
+  startStream();
 }
 
 export function unmount() {
   activeSticks.clear();
+  axes.lx = axes.ly = axes.rx = axes.ry = 0;
   stopStream(true);
   if (unsub) unsub();
   unsub = null;
@@ -235,7 +239,7 @@ function paint(ctx) {
     : pad.source === 'virtual' ? '网页虚拟'
       : DASH;
   el.battText.textContent = pad.battery == null ? '—（joydev 不上报电量）' : fmt.pct(pad.battery);
-  el.hintText.textContent = pad.hint || (online ? '推一下摇杆就进入驾驶' : '连接断了');
+  el.hintText.textContent = pad.note || pad.hint || (online ? '先点击启用驾驶；Options 是急停' : '连接断了');
 
   el.scanBtn.disabled = !online;
   el.pairBtn.disabled = !online;
@@ -308,7 +312,7 @@ function bindStick(svg, knob, side) {
     knob.setAttribute('cy', cy);
     if (side === 'l') { axes.lx = 0; axes.ly = 0; } else { axes.rx = 0; axes.ry = 0; }
     activeSticks.delete(side);
-    if (activeSticks.size === 0) stopStream(true);
+    if (activeSticks.size === 0) stopStickInput();
     else sendSticks();
     paint(ctxRef);
   };
@@ -321,7 +325,7 @@ function bindStick(svg, knob, side) {
     knob.setAttribute('cy', cy);
     if (side === 'l') { axes.lx = 0; axes.ly = 0; } else { axes.rx = 0; axes.ry = 0; }
     activeSticks.delete(side);
-    if (activeSticks.size === 0) stopStream(true);
+    if (activeSticks.size === 0) stopStickInput();
     else sendSticks();
     paint(ctxRef);
   });
@@ -375,9 +379,14 @@ function stopStream(sendStop) {
   clearInterval(timer);
   timer = 0;
   if (sendStop && ctxRef && ctxRef.link.online) {
-    // 契约里的 pad.stop：只停速度，不卸力
-    ctxRef.cmd('pad.stop', {}).catch(() => {});
+    // Leaving the page revokes driving, not just the current velocity.
+    ctxRef.cmd('pad.op', { op: 'drive', on: false }).catch(() => {});
   }
+}
+
+function stopStickInput() {
+  sendSticks();
+  if (ctxRef?.link.online) ctxRef.cmd('pad.stop', {}).catch(() => {});
 }
 
 function round3(v) {
@@ -394,7 +403,7 @@ async function tapKey(key, node) {
     try {
       const data = await ctxRef.cmd('relax', {}, { timeout: 8000 });
       if (data && data.ok === false) toast(data.error || '卸力没成功', 'error');
-      else toast('已全部卸力', 'ok');
+      else toast(data?.state === 'pending' ? (data.note || '已提交急停请求，等待硬件确认') : '已全部卸力', 'ok');
     } catch (err) {
       toast(err.message || String(err), 'error');
     }
